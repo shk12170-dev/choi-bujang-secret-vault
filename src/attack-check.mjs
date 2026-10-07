@@ -218,9 +218,12 @@ async function runStep5Checks(config) {
     // JSON이 아닌 응답은 오류 문구가 없는 것으로 기록합니다.
   }
   let publishedRoutes = null;
+  let publishedOriginal = '읽을 수 없음';
   try {
     const aleph = await (await fetch(new URL('/aleph.json', app), { redirect: 'error', signal: AbortSignal.timeout(10000) })).json();
     publishedRoutes = Array.isArray(aleph?.allowedRoutes) ? aleph.allowedRoutes.length : 0;
+    publishedOriginal = typeof aleph?.originalApiUrl === 'string' && aleph.originalApiUrl.startsWith('https://')
+      && aleph.originalApiUrl === config.originalApiUrl ? '있음(설정과 같은 HTTPS 주소)' : '없거나 설정과 다름';
   } catch {
     // 읽을 수 없으면 건수를 알 수 없음으로 기록합니다.
   }
@@ -228,6 +231,8 @@ async function runStep5Checks(config) {
     ...previous,
     { attackId: 'aleph_json_allowed_routes', expected: '/aleph.json의 allowedRoutes에 허용 경로가 하나 이상 적혀 있음',
       observed: `비로그인 /aleph.json의 allowedRoutes ${publishedRoutes ?? '읽을 수 없음'}개` },
+    { attackId: 'aleph_json_original_api_url', expected: '/aleph.json에 https로 시작하는 originalApiUrl이 있음',
+      observed: `비로그인 /aleph.json의 originalApiUrl ${publishedOriginal}` },
     { attackId: 'browser_has_no_supabase_key', expected: '첫 화면 코드에 Supabase 공개 키·주소·SDK가 없음',
       observed: keyInBrowser ? '첫 화면 코드에서 Supabase 키 또는 SDK 이름이 발견됨' : '첫 화면 코드에 Supabase 공개 키·주소·SDK 이름이 없음' },
     { attackId: 'original_api_keyless_read', expected: '원본 자료 경로를 키 없이 직접 불러도 메모가 없음',

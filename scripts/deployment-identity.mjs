@@ -33,5 +33,17 @@ export function deploymentIdentity(env, config) {
   if (Array.isArray(routes) && routes.length && routes.every(route => typeof route === 'string' && route.length <= 200)) {
     identity.allowedRoutes = [...routes];
   }
+  // 5단계부터 원본 자료 API의 HTTPS 경로(쿼리·사용자 정보 없음)를 /aleph.json에도 공개합니다. 비밀값이 아닌 주소만 담습니다.
+  const original = config.originalApiUrl;
+  if (typeof original === 'string' && original.length <= 250) {
+    try {
+      const url = new URL(original);
+      if (url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash && url.hostname.includes('.')) {
+        identity.originalApiUrl = original;
+      }
+    } catch {
+      // 주소 형식이 맞지 않으면 담지 않습니다. 제출 묶음 점검이 이를 오류로 알려 줍니다.
+    }
+  }
   return identity;
 }

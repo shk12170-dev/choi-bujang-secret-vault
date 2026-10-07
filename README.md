@@ -173,7 +173,7 @@ DB에서 직접 시험한 결과(롤백함, 시험 SQL은 계정 이메일이 �
   - 로그인: `POST /api/auth/login`·`/api/auth/refresh`·`/api/auth/logout` (`src/auth-proxy.mjs`). 서버가 Supabase Auth에 대신 요청하고 브라우저에는 토큰·이메일·만료 시각만 돌려줍니다. 입력 길이를 검사하고 비밀번호·토큰은 로그에 남기지 않습니다.
   - 로그인 세션은 이 탭의 `sessionStorage`에만 두고 비밀번호는 저장하지 않습니다. 탭을 닫으면 로그아웃됩니다.
 - **키는 서버에만 있습니다.** Vercel 환경변수 `SUPABASE_URL`, 서버 전용 `SUPABASE_SECRET_KEY`, 로그인 요청용 `SUPABASE_PUBLISHABLE_KEY`를 학생이 Environment Variables 화면에 직접 넣었습니다. 코드·Git·제출 묶음에는 값이 없습니다. (이전 커밋에는 화면 코드에 있던 공개용 키가 남아 있습니다. 공개용 키이며 아래 권한 회수로 이 키로는 자료에 접근할 수 없습니다.)
-- **원본 자료 경로:** `aleph.config.json`의 `originalApiUrl`은 쿼리 없는 `https://lvakmgwgeayyxrjwdltp.supabase.co/rest/v1/user_notes`이고 `step`은 5입니다. 허용 경로(`allowedRoutes`)는 자료 API 다섯 개 그대로입니다.
+- **원본 자료 경로:** `aleph.config.json`의 `originalApiUrl`은 쿼리 없는 `https://lvakmgwgeayyxrjwdltp.supabase.co/rest/v1/user_notes`이고 `step`은 5입니다. 허용 경로(`allowedRoutes`)는 자료 API 다섯 개 그대로입니다. 심판은 배포된 `/aleph.json`을 읽으므로 빌드(`scripts/deployment-identity.mjs`)가 `originalApiUrl`(쿼리·사용자 정보가 없는 HTTPS 주소만)과 `allowedRoutes`를 `/aleph.json`에도 담습니다. 5단계 첫 제출에서 `/aleph.json`에 `originalApiUrl`이 없어 `S05_ORIGINAL_URL_MISSING`으로 지적받아 고쳤습니다.
 - **직접 권한 회수:** `supabase/user_notes_revoke_direct.sql`로 `user_notes`에서 `PUBLIC`·`anon`·`authenticated`의 권한을 모두 회수했습니다. RLS와 4단계 정책(`auth.uid() = owner_id`)은 켜 둔 채 남겨 권한이 실수로 다시 열려도 본인 행만 보이게 합니다. 서버 함수는 서버 전용 키(`service_role`)로 접근하므로 영향이 없습니다. 다른 테이블은 건드리지 않았습니다.
 
 ### 권한 확인 결과 (적용 전후, `supabase/user_notes_grants_check.sql`)
@@ -213,6 +213,6 @@ DB에서 직접 시험한 결과(롤백함, 시험 SQL은 계정 이메일이 �
 
 | 항목 | 확인 방법 |
 |---|---|
-| `/aleph.json`에 `allowedRoutes`가 적혀 있음 | `curl -s $APP/aleph.json` → `step 5`, 현재 커밋, `allowedRoutes` 다섯 개. `scripts/build-public.mjs`가 빌드할 때 `aleph.config.json`의 허용 경로를 담아 `public/aleph.json`을 만들며 이 파일을 지우지 않습니다. |
+| `/aleph.json`에 `allowedRoutes`가 적혀 있음 | `curl -s $APP/aleph.json` → `step 5`, 현재 커밋, `allowedRoutes` 다섯 개와 `originalApiUrl`(https). `scripts/build-public.mjs`가 빌드할 때 `aleph.config.json`의 허용 경로를 담아 `public/aleph.json`을 만들며 이 파일을 지우지 않습니다. |
 | 첫 화면에 보안 헤더 | `curl -I $APP/` → `X-Content-Type-Options: nosniff` |
 | 화면 코드에 Supabase 공개 키가 없음 | `curl -s $APP/ \| grep -c sb_publishable_` → `0` |
