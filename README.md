@@ -31,9 +31,9 @@
 - `aleph.config.json`은 `step: 2`이며 실제 저장소·배포 주소를 담습니다. 첫 화면을 포함한 모든 응답에 `X-Content-Type-Options: nosniff` 헤더를 붙입니다(`vercel.json`).
 - 빌드는 더 이상 메모를 `public/data.json`으로 복사하지 않습니다. `public/data.json`은 메모 0건이고 1단계 확인 표시(`sampleMarker`)도 없으며, 메모나 표시가 다시 들어가면 빌드가 실패합니다. `/aleph.json`은 계속 빌드 때 생성됩니다.
 
-### 아직 남은 약점
+### 2단계 당시의 약점 (3단계에서 해결)
 
-- **`/api/notes`는 공개 주소입니다.** 로그인 확인이 없어 주소를 아는 누구나 비로그인 요청으로 가상 메모 네 건을 받을 수 있습니다. 화면에서 `data.json`을 뺀 것은 저장 위치를 옮긴 것이지 접근을 막은 것이 아닙니다. 3단계에서 로그인한 본인만 읽도록 막기 전까지 이 테이블에는 가상 메모만 둡니다.
+- **(해결됨: 3단계에서 로그인 필수로 막음) `/api/notes`는 공개 주소였습니다.** 로그인 확인이 없어 주소를 아는 누구나 비로그인 요청으로 가상 메모 네 건을 받을 수 있습니다. 화면에서 `data.json`을 뺀 것은 저장 위치를 옮긴 것이지 접근을 막은 것이 아닙니다. 3단계에서 로그인한 본인만 읽도록 막기 전까지 이 테이블에는 가상 메모만 둡니다.
 
 ### 메모 문장 검색 확인 절차
 
@@ -46,7 +46,7 @@
      printf '%s %s 메모문장 %s건\n' "$p" "$(curl -s -o /dev/null -w '%{http_code}' "$APP$p")" "$(curl -s "$APP$p" | grep -o '실습용 가[상]' | wc -l)"
    done
    ```
-   정상: `/`·`/data.json`·`/aleph.json`은 0건입니다. `/api/notes`는 4건이 나오며, 이것이 아래 남은 약점입니다.
+   정상: `/`·`/data.json`·`/aleph.json`은 0건입니다. 3단계부터 `/api/notes`는 로그인 없이 401과 JSON 오류 문구만 돌려주므로 이 명령에서도 0건입니다.
 2. GitHub 최신 파일:
    ```bash
    git fetch origin && git grep -n '실습용 가[상]' origin/main -- . || echo '최신 파일: 메모 문장 없음'
@@ -78,5 +78,46 @@
 
 | 대상 | 상태 |
 |---|---|
-| `/api/notes` 비로그인 GET | 막지 않음. 3단계 전까지 누구나 가상 메모 네 건을 받을 수 있음 |
+| `/api/notes` 비로그인 GET | 2단계 당시에는 막지 않았음. 3단계에서 401로 막음 |
 | `SUPABASE_SECRET_KEY` | 서버 환경변수에만 있음. 공개 키로 테이블을 직접 읽는 요청은 RLS로 거부되어야 하며, 심판이 확인함 |
+
+## 3단계: 진짜 로그인을 붙임
+
+- **로그인:** 화면(`public/index.html`)이 Supabase Auth 이메일·비밀번호 로그인·로그아웃을 공식 SDK(`@supabase/supabase-js`)로 처리합니다. 화면 코드에는 공개용 Project URL과 publishable key만 있고, 비밀번호·토큰은 코드에 두지 않습니다. 서버 전용 `SUPABASE_SECRET_KEY`는 Vercel 환경변수에만 있습니다.
+- **서버 검사:** 모든 `/api/notes` 요청은 `src/memo-api.mjs`가 시작 틀의 `src/verify-login.mjs`(수정하지 않음)로 `Authorization: Bearer` 토큰을 검사합니다. 사용자 ID는 서버가 검증한 토큰에서만 얻고, 브라우저가 보낸 `userId`·`role`은 읽지 않습니다. 토큰이 없거나 위조·만료·다른 발급자·다른 서비스용이면 자료 없이 `401`과 JSON 오류 문구(`LOGIN_REQUIRED`)로 거부합니다.
+- **메모 추가·수정·삭제:** `user_notes` 테이블(`supabase/user_notes.sql`, RLS 켬, `anon`·`authenticated` 권한 없음, `owner_id uuid`에 외래키 없음)을 서버 함수만 서버 전용 키로 읽고 씁니다. 추가할 때 서버가 확인한 사용자 ID를 `owner_id`로 저장합니다.
+- **발급자 정보:** `aleph.config.json`의 `identityProvider`에 발급자·대상·공개키 주소를 적었고 비밀 키는 넣지 않았습니다. `step`은 3입니다.
+
+### 허용 경로(`allowedRoutes`)
+
+| 경로 | 동작 | 응답 |
+|---|---|---|
+| `GET /api/notes` | 로그인 사용자의 메모 목록 | `[{id,title,body}]` |
+| `POST /api/notes` | 메모 추가. `id`(UUID)는 없으면 서버가 만듦 | `201 {id}` |
+| `GET /api/notes/:id` | 메모 한 건 | `{id,title,body}`, 없으면 `404` |
+| `PUT /api/notes/:id` | 메모 수정 | `{id,title,body}` |
+| `DELETE /api/notes/:id` | 메모 삭제(뒤이은 GET은 `404`) | `{id}` |
+
+로그인 없는 요청은 위 모든 경로에서 `401` + JSON입니다. 허용하지 않은 메서드는 `405`입니다.
+
+### 아직 남은 약점 (4단계로 넘김)
+
+- **소유자 검사가 없습니다.** 로그인한 사용자는 다른 사람의 메모 UUID를 알면 `GET`·`PUT`·`DELETE /api/notes/:id`로 읽고 고치고 지울 수 있습니다. 목록은 본인 `owner_id` 메모만 돌려주지만 한 건 경로는 `owner_id`를 비교하지 않습니다. 4단계에서 서버가 `owner_id`와 토큰의 사용자 ID를 비교하도록 고칩니다. 로그인은 신원 확인일 뿐이고 접근 권한이 아닙니다.
+- **이전 `notes` 테이블과 옛 공개 이력은 그대로입니다.** 2단계의 `notes` 테이블(가상 메모 네 건)은 이제 쓰이지 않지만 지우지 않았고, 옛 공개 커밋 `80aae74`와 1단계 배포의 노출도 해소되지 않았습니다.
+- 가상 메모만 쓰며, 실제 개인정보·비밀번호를 메모에 적지 않습니다.
+
+### 직접 확인할 것
+
+1. 시크릿 창에서 로그인 없이 자료가 안 보이는가? (「로그인하면 자료가 보입니다.」만 보이고 쓰기 칸이 없어야 함)
+2. 정상 A 로그인 뒤 가상 메모를 추가·수정·삭제할 수 있는가?
+3. 브라우저에 서버 전용 키가 없는가? (페이지 소스에서 `sb_secret_`·`service_role`이 검색되지 않아야 함. `sb_publishable_`만 있어야 함)
+
+### 100점 항목 확인
+
+| 항목 | 확인 방법 |
+|---|---|
+| 로그인 없이 목록 요청 시 401 또는 403 + JSON 오류 문구 | `curl -i $APP/api/notes` → `401`, `Content-Type: application/json`, `{"error":"LOGIN_REQUIRED",…}` |
+| `/aleph.json`이 열림 | `curl -s $APP/aleph.json` → `step 3`과 현재 커밋. 빌드 스크립트가 지우지 않음 |
+| 첫 화면에 보안 헤더 | `curl -I $APP/` → `X-Content-Type-Options: nosniff` (`vercel.json`의 `headers`) |
+
+위 세 가지는 `npm run bundle`의 직접 점검(`src/attack-check.mjs`)에서도 비로그인 요청으로 확인해 기록합니다.
