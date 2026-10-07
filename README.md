@@ -29,7 +29,7 @@
 - 가상 메모 네 건은 학습용 Supabase `public.notes` 테이블에 있습니다. 테이블은 RLS가 켜져 있고 `anon`·`authenticated`에는 읽기 권한이 없습니다. 테이블을 만든 SQL(`supabase/*.local.sql`)은 메모 문장이 들어 있어 Git에 올리지 않습니다.
 - 화면(`public/index.html`)은 `/api/notes` 서버 함수(`api/notes.js`)로 메모를 읽습니다. 함수는 Vercel 환경변수 `SUPABASE_URL`과 서버 전용 `SUPABASE_SECRET_KEY`만 씁니다. 키는 브라우저 파일·응답·로그·Git에 넣지 않으며, Vercel 프로젝트 설정의 Environment Variables 화면에 학생이 직접 입력합니다.
 - `aleph.config.json`은 `step: 2`이며 실제 저장소·배포 주소를 담습니다. 첫 화면을 포함한 모든 응답에 `X-Content-Type-Options: nosniff` 헤더를 붙입니다(`vercel.json`).
-- 빌드는 더 이상 메모를 `public/data.json`으로 복사하지 않습니다. `public/data.json`은 메모 0건이며, 메모가 다시 들어가면 빌드가 실패합니다. `/aleph.json`은 계속 빌드 때 생성됩니다.
+- 빌드는 더 이상 메모를 `public/data.json`으로 복사하지 않습니다. `public/data.json`은 메모 0건이고 1단계 확인 표시(`sampleMarker`)도 없으며, 메모나 표시가 다시 들어가면 빌드가 실패합니다. `/aleph.json`은 계속 빌드 때 생성됩니다.
 
 ### 아직 남은 약점
 
