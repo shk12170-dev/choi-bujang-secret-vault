@@ -19,7 +19,7 @@ export function deploymentIdentity(env, config) {
       || !/^[A-Z0-9_]{1,80}$/u.test(config.sampleMarker)) {
     throw new Error('배포 식별 정보를 확인할 수 없습니다. Vercel 시스템 환경변수와 aleph.config.json의 step을 확인하세요.');
   }
-  return {
+  const identity = {
     schema: 'aleph.defense.deployment.v1',
     step: config.step,
     repoUrl: `https://github.com/${owner.toLowerCase()}/${repo.toLowerCase()}`,
@@ -28,4 +28,10 @@ export function deploymentIdentity(env, config) {
     judgeIssuer: config.judgeIssuer,
     sampleMarker: config.sampleMarker,
   };
+  // 3단계부터 aleph.config.json에 적은 허용 경로를 /aleph.json에도 공개합니다(경로 이름만, 비밀값 없음).
+  const routes = config.allowedRoutes;
+  if (Array.isArray(routes) && routes.length && routes.every(route => typeof route === 'string' && route.length <= 200)) {
+    identity.allowedRoutes = [...routes];
+  }
+  return identity;
 }

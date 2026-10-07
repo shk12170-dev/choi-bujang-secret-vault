@@ -4,6 +4,7 @@ export async function runAttackChecks(config) {
   if (config.step === 2) return runStep2Checks(config);
   if (config.step === 3) return runStep3Checks(config);
   if (config.step === 4) return runStep4Checks(config);
+  if (config.step === 5) return runStep5Checks(config);
   if (config.step !== 1) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   let app;
   try {
@@ -177,5 +178,61 @@ async function runStep4Checks(config) {
       observed: `비로그인 PUT /api/notes/:id ${await attempt('PUT', { title: 'check', body: 'check' })}` },
     { attackId: 'anonymous_note_delete_by_id', expected: '메모 번호만 아는 로그인 없는 삭제가 401 또는 403과 JSON 오류 문구로 거부됨',
       observed: `비로그인 DELETE /api/notes/:id ${await attempt('DELETE')}` },
+  ];
+}
+
+// 5단계: 4단계 점검에 더해, 화면에 공개 키가 없는지, 원본 자료 경로를 키 없이 불러도 메모가 없는지,
+// 서버 로그인 함수가 빈 요청을 거부하는지 직접 보낸 요청으로 점검합니다.
+// 공개 키는 서버 환경변수에만 있어 이 점검에서는 쓰지 않으며, 공개 키(anon)로 직접 부르는 시험은 심판과 README의 수동 확인이 맡습니다.
+async function runStep5Checks(config) {
+  const previous = await runStep4Checks(config);
+  const app = deployedApp(config);
+  const html = await (await fetch(app, { redirect: 'error', signal: AbortSignal.timeout(10000) })).text();
+  const keyInBrowser = /sb_publishable_|sb_secret_|service_role|supabase-js|createClient|supabase\.co/u.test(html);
+
+  let originalStatus = 'URL 없음';
+  let originalLeak = false;
+  try {
+    const original = new URL(config.originalApiUrl);
+    if (original.protocol !== 'https:' || original.search || original.hash) throw new Error('invalid');
+    const response = await fetch(original, { redirect: 'error', signal: AbortSignal.timeout(10000) });
+    originalStatus = `HTTP ${response.status}`;
+    try {
+      const data = await response.json();
+      originalLeak = (Array.isArray(data) && data.length > 0) || typeof data?.title === 'string';
+    } catch {
+      // JSON이 아니면 메모가 없는 것으로 봅니다.
+    }
+  } catch {
+    originalStatus = 'originalApiUrl을 확인할 수 없음';
+  }
+
+  const emptyLogin = await fetch(new URL('/api/auth/login', app), {
+    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
+    headers: { 'Content-Type': 'application/json' }, body: '{}',
+  });
+  let loginError = false;
+  try {
+    loginError = typeof (await emptyLogin.json())?.error === 'string';
+  } catch {
+    // JSON이 아닌 응답은 오류 문구가 없는 것으로 기록합니다.
+  }
+  let publishedRoutes = null;
+  try {
+    const aleph = await (await fetch(new URL('/aleph.json', app), { redirect: 'error', signal: AbortSignal.timeout(10000) })).json();
+    publishedRoutes = Array.isArray(aleph?.allowedRoutes) ? aleph.allowedRoutes.length : 0;
+  } catch {
+    // 읽을 수 없으면 건수를 알 수 없음으로 기록합니다.
+  }
+  return [
+    ...previous,
+    { attackId: 'aleph_json_allowed_routes', expected: '/aleph.json의 allowedRoutes에 허용 경로가 하나 이상 적혀 있음',
+      observed: `비로그인 /aleph.json의 allowedRoutes ${publishedRoutes ?? '읽을 수 없음'}개` },
+    { attackId: 'browser_has_no_supabase_key', expected: '첫 화면 코드에 Supabase 공개 키·주소·SDK가 없음',
+      observed: keyInBrowser ? '첫 화면 코드에서 Supabase 키 또는 SDK 이름이 발견됨' : '첫 화면 코드에 Supabase 공개 키·주소·SDK 이름이 없음' },
+    { attackId: 'original_api_keyless_read', expected: '원본 자료 경로를 키 없이 직접 불러도 메모가 없음',
+      observed: `키 없는 직접 GET ${originalStatus}, 메모 ${originalLeak ? '노출됨' : '없음'}` },
+    { attackId: 'auth_proxy_empty_login', expected: '서버 로그인 함수가 빈 요청을 4xx와 JSON 오류 문구로 거부함',
+      observed: `빈 POST /api/auth/login HTTP ${emptyLogin.status}, 오류 문구 ${loginError ? '있음' : '없음'}` },
   ];
 }

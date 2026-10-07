@@ -165,3 +165,54 @@ DB에서 직접 시험한 결과(롤백함, 시험 SQL은 계정 이메일이 �
 | 로그인 없이 목록 요청 시 401 또는 403 + JSON 오류 문구 | `curl -i $APP/api/notes` → `401`, `application/json`, `{"error":"LOGIN_REQUIRED",…}` |
 | `/aleph.json`이 열림 | `curl -s $APP/aleph.json` → `step 4`와 현재 커밋 |
 | 첫 화면에 보안 헤더 | `curl -I $APP/` → `X-Content-Type-Options: nosniff` |
+
+## 5단계: 자료 요청을 서버 한곳으로 모음
+
+- **브라우저는 서버 함수만 부릅니다.** 화면(`public/index.html`)은 Supabase 주소·공개 키·SDK를 모두 갖지 않고 우리 서버 함수만 부릅니다.
+  - 메모: `GET·POST /api/notes`, `GET·PUT·DELETE /api/notes/:id` (3·4단계의 로그인·소유자 검사 그대로)
+  - 로그인: `POST /api/auth/login`·`/api/auth/refresh`·`/api/auth/logout` (`src/auth-proxy.mjs`). 서버가 Supabase Auth에 대신 요청하고 브라우저에는 토큰·이메일·만료 시각만 돌려줍니다. 입력 길이를 검사하고 비밀번호·토큰은 로그에 남기지 않습니다.
+  - 로그인 세션은 이 탭의 `sessionStorage`에만 두고 비밀번호는 저장하지 않습니다. 탭을 닫으면 로그아웃됩니다.
+- **키는 서버에만 있습니다.** Vercel 환경변수 `SUPABASE_URL`, 서버 전용 `SUPABASE_SECRET_KEY`, 로그인 요청용 `SUPABASE_PUBLISHABLE_KEY`를 학생이 Environment Variables 화면에 직접 넣었습니다. 코드·Git·제출 묶음에는 값이 없습니다. (이전 커밋에는 화면 코드에 있던 공개용 키가 남아 있습니다. 공개용 키이며 아래 권한 회수로 이 키로는 자료에 접근할 수 없습니다.)
+- **원본 자료 경로:** `aleph.config.json`의 `originalApiUrl`은 쿼리 없는 `https://lvakmgwgeayyxrjwdltp.supabase.co/rest/v1/user_notes`이고 `step`은 5입니다. 허용 경로(`allowedRoutes`)는 자료 API 다섯 개 그대로입니다.
+- **직접 권한 회수:** `supabase/user_notes_revoke_direct.sql`로 `user_notes`에서 `PUBLIC`·`anon`·`authenticated`의 권한을 모두 회수했습니다. RLS와 4단계 정책(`auth.uid() = owner_id`)은 켜 둔 채 남겨 권한이 실수로 다시 열려도 본인 행만 보이게 합니다. 서버 함수는 서버 전용 키(`service_role`)로 접근하므로 영향이 없습니다. 다른 테이블은 건드리지 않았습니다.
+
+### 권한 확인 결과 (적용 전후, `supabase/user_notes_grants_check.sql`)
+
+| 역할 | 적용 전 | 적용 후 |
+|---|---|---|
+| `anon` | 권한 없음 | 권한 없음 |
+| `authenticated` | SELECT·INSERT·UPDATE·DELETE | **권한 없음** |
+| `service_role` | 전체 | 전체(서버 함수가 쓰는 권한, 그대로) |
+
+적용 후 `rls_enabled = true`, 정책 4개 유지, `anon_can_select = false`, `authenticated_can_select = false`, `authenticated_can_insert = false`, `service_role_can_select = true`입니다.
+
+### 원본 자료 직접 요청 확인
+
+| 요청 | 결과 |
+|---|---|
+| 원본 경로를 키 없이 GET | `401` 키 없음, 메모 없음 |
+| 같은 경로를 공개(anon) 키로 GET | `42501` 권한 없음, 메모 없음 |
+| 공개(anon) 키로 추가·수정·삭제 | 거부(`42501` 또는 `401`) |
+
+심판은 `authenticated` 역할의 직접 접근을 재현할 수 없어서 `anon` 키로만 확인합니다. 그래도 `authenticated`의 권한도 회수해 두었습니다.
+
+### 직접 확인할 것
+
+1. 브라우저는 서버 함수만 부르는가? (개발자 도구 Network 탭에 `supabase.co` 요청이 없고 `/api/auth/*`·`/api/notes*`만 보여야 함. 페이지 소스에 `sb_publishable_`이 없어야 함)
+2. A 정상·B 거부·무로그인을 확인했는가? (A는 자기 메모를 읽고 추가·수정·삭제, B는 A의 메모가 안 보이고, 로그인 없이는 401)
+3. 원본 자료 주소를 공개 키로 직접 불러도 메모가 없는가? (위 표)
+
+### 점검 기록과 남은 약점
+
+- `npm run bundle`의 직접 점검(`src/attack-check.mjs`)은 비로그인 요청만 보냅니다. 화면에 키 없음, 원본 경로를 키 없이 부를 때 메모 없음, 서버 로그인 함수가 빈 요청을 거부함, 메모 번호만 알고 로그인 없이 읽기·수정·삭제 거부를 확인해 기록합니다. A·B 계정 간 접근과 공개 키(anon)로 직접 부르는 시험은 키·비밀번호가 필요해 자동 점검에 넣지 못했고 위 수동 확인과 `test/` 시험으로 확인했습니다.
+- **로그인 요청이 서버를 거치므로** Supabase의 로그인 시도 횟수 제한이 서버 전체로 공유됩니다. 학습용이라 두었습니다.
+- **과거 노출은 그대로입니다.** 이전 `notes` 테이블(가상 메모 네 건)과 옛 공개 커밋 `80aae74`, 1단계 배포의 노출은 해소되지 않았습니다. 이전 커밋에는 화면 코드에 있던 공개용 키도 남아 있습니다.
+- 가상 메모만 쓰며, 실제 개인정보·비밀번호를 메모에 적지 않습니다.
+
+### 100점 항목 확인
+
+| 항목 | 확인 방법 |
+|---|---|
+| `/aleph.json`에 `allowedRoutes`가 적혀 있음 | `curl -s $APP/aleph.json` → `step 5`, 현재 커밋, `allowedRoutes` 다섯 개. `scripts/build-public.mjs`가 빌드할 때 `aleph.config.json`의 허용 경로를 담아 `public/aleph.json`을 만들며 이 파일을 지우지 않습니다. |
+| 첫 화면에 보안 헤더 | `curl -I $APP/` → `X-Content-Type-Options: nosniff` |
+| 화면 코드에 Supabase 공개 키가 없음 | `curl -s $APP/ \| grep -c sb_publishable_` → `0` |
