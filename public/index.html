@@ -63,11 +63,28 @@
     <ul id="notes" aria-live="polite"><li>자료를 불러오는 중입니다.</li></ul>
   </main>
   <script type="module">
-    // 공개용 값입니다(서버 전용 secret key가 아닙니다). 비밀번호·토큰은 코드에 두지 않고 공식 SDK가 다룹니다.
-    import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm';
-    const SUPABASE_URL = 'https://lvakmgwgeayyxrjwdltp.supabase.co';
-    const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_fgxwtW_AyYyBceWjqSeo_A_gpJ-8gdR';
-    const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+    // 5단계: 화면은 Supabase 주소나 키를 갖지 않고 우리 서버 함수(/api/auth/*, /api/notes*)만 부릅니다.
+    // 로그인 세션은 이 탭의 sessionStorage에만 두고, 비밀번호는 저장하지 않습니다.
+    const SESSION_KEY = 'byteback.session';
+    const readSession = () => {
+      try { return JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch { return null; }
+    };
+    const writeSession = value => {
+      try {
+        if (value) sessionStorage.setItem(SESSION_KEY, JSON.stringify(value));
+        else sessionStorage.removeItem(SESSION_KEY);
+      } catch { /* 저장소를 쓸 수 없으면 새로고침 때 로그아웃됩니다 */ }
+    };
+    async function authCall(action, body, token) {
+      const response = await fetch(`/api/auth/${action}`, {
+        method: 'POST', cache: 'no-store',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(body ?? {}),
+      });
+      let data = null;
+      try { data = await response.json(); } catch { /* 본문 없음 */ }
+      return { ok: response.ok, status: response.status, data };
+    }
 
     const $ = id => document.getElementById(id);
     const list = $('notes');
@@ -86,6 +103,9 @@
       email_not_confirmed: '이메일 인증이 끝나지 않은 계정입니다.',
       over_request_rate_limit: '시도가 너무 많습니다. 잠시 뒤에 다시 해 주세요.',
       over_email_send_rate_limit: '시도가 너무 많습니다. 잠시 뒤에 다시 해 주세요.',
+      INVALID_INPUT: '이메일과 비밀번호를 모두 입력해 주세요.',
+      AUTH_NOT_CONFIGURED: '서버의 로그인 설정이 아직 끝나지 않았습니다.',
+      AUTH_UNAVAILABLE: '로그인 서버에 연결하지 못했습니다. 잠시 뒤에 다시 해 주세요.',
     };
     const showError = error => {
       errorBox.textContent = error
@@ -110,12 +130,24 @@
       editor.hidden = !signedIn;
       $('auth-title').textContent = signedIn ? '로그인됨' : '로그인';
       status.textContent = signedIn
-        ? `${session.user.email} 계정으로 로그인한 상태입니다.`
+        ? `${session.email ?? '알 수 없는 계정'} 계정으로 로그인한 상태입니다.`
         : '로그인하지 않은 상태입니다.';
     }
 
     // 모든 요청에 로그인 토큰만 보냅니다. 사용자 ID는 서버가 토큰에서 직접 확인합니다.
-    async function api(path, options = {}) {
+    async function refreshSession() {
+      if (!session?.refresh_token) return false;
+      const result = await authCall('refresh', { refresh_token: session.refresh_token });
+      if (!result.ok) return false;
+      session = result.data;
+      writeSession(session);
+      return true;
+    }
+
+    async function api(path, options = {}, retried = false) {
+      // 로그인 토큰이 곧 만료되면 먼저 새 토큰으로 바꿉니다.
+      if (!retried && session?.expires_at && session.expires_at - Date.now() / 1000 < 60) await refreshSession();
+      if (!session) throw new Error('로그인이 필요합니다.');
       const response = await fetch(path, {
         cache: 'no-store',
         ...options,
@@ -124,6 +156,7 @@
           ...(options.body ? { 'Content-Type': 'application/json' } : {}),
         },
       });
+      if (response.status === 401 && !retried && await refreshSession()) return api(path, options, true);
       let data = null;
       try { data = await response.json(); } catch { /* 본문 없음 */ }
       if (!response.ok) {
@@ -201,16 +234,23 @@
     loginForm.addEventListener('submit', async event => {
       event.preventDefault();
       showError(null);
-      const { error } = await supabase.auth.signInWithPassword({
-        email: $('email').value.trim(), password: $('password').value,
-      });
+      const result = await authCall('login', { email: $('email').value.trim(), password: $('password').value });
       $('password').value = '';
-      if (error) showError(error);
+      if (!result.ok) return showError({ code: result.data?.error ?? `HTTP ${result.status}` });
+      session = result.data;
+      writeSession(session);
+      renderAuth();
+      loadNotes();
     });
     logout.addEventListener('click', async () => {
       showError(null);
-      const { error } = await supabase.auth.signOut();
-      if (error) showError(error);
+      const token = session?.access_token;
+      session = null;
+      writeSession(null);
+      resetEditor();
+      renderAuth();
+      loadNotes();
+      if (token) await authCall('logout', {}, token);
     });
     noteForm.addEventListener('submit', async event => {
       event.preventDefault();
@@ -227,13 +267,7 @@
     });
     $('note-cancel').addEventListener('click', () => { resetEditor(); showNoteError(null); });
 
-    supabase.auth.onAuthStateChange((_event, next) => {
-      session = next;
-      renderAuth();
-      if (!next) resetEditor();
-      loadNotes();
-    });
-    session = (await supabase.auth.getSession()).data.session;
+    session = readSession();
     renderAuth();
     loadNotes();
   </script>
