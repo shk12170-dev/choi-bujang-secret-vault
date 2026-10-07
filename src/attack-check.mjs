@@ -3,6 +3,7 @@
 export async function runAttackChecks(config) {
   if (config.step === 2) return runStep2Checks(config);
   if (config.step === 3) return runStep3Checks(config);
+  if (config.step === 4) return runStep4Checks(config);
   if (config.step !== 1) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   let app;
   try {
@@ -140,5 +141,41 @@ async function runStep3Checks(config) {
       observed: nosniff ? '첫 화면 응답에 nosniff 헤더 있음' : `첫 화면 응답에 nosniff 헤더 없음 (HTTP ${home.status})` },
     { attackId: 'browser_has_no_server_key', expected: '첫 화면 코드에 서버 전용 키가 없음',
       observed: serverKeyInBrowser ? '첫 화면 코드에서 서버 전용 키 이름이 발견됨' : '첫 화면 코드에 서버 전용 키 이름이 없음' },
+  ];
+}
+
+// 4단계: 3단계 점검에 더해, 메모 번호만 알고 로그인 없이 읽기·수정·삭제를 시도합니다.
+// 서로 다른 계정(A/B) 사이의 접근은 비밀번호가 필요해 여기서 보내지 않습니다(README의 직접 확인 절차 참고).
+async function runStep4Checks(config) {
+  const previous = await runStep3Checks(config);
+  const app = deployedApp(config);
+  // 실제로 있을 법한 형식의 임의 메모 번호를 실행할 때마다 새로 만듭니다.
+  const id = crypto.randomUUID();
+  const attempt = async (method, body) => {
+    const response = await fetch(new URL(`/api/notes/${id}`, app), {
+      method, redirect: 'error', signal: AbortSignal.timeout(10000),
+      ...(body ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}),
+    });
+    let hasMessage = false;
+    let leaked = false;
+    try {
+      const data = await response.clone().json();
+      hasMessage = typeof data?.error === 'string';
+      leaked = typeof data?.title === 'string' || typeof data?.body === 'string';
+    } catch {
+      // JSON이 아닌 응답은 오류 문구가 없는 것으로 기록합니다.
+    }
+    const type = response.headers.get('content-type') ?? '';
+    const denied = (response.status === 401 || response.status === 403) && type.includes('application/json') && hasMessage && !leaked;
+    return `HTTP ${response.status}, ${type.includes('application/json') ? 'JSON' : 'JSON 아님'}, 오류 문구 ${hasMessage ? '있음' : '없음'}, 메모 ${leaked ? '노출됨' : '없음'} (${denied ? '거부됨' : '거부되지 않음'})`;
+  };
+  return [
+    ...previous,
+    { attackId: 'anonymous_note_read_by_id', expected: '메모 번호만 아는 로그인 없는 조회가 401 또는 403과 JSON 오류 문구로 거부됨',
+      observed: `비로그인 GET /api/notes/:id ${await attempt('GET')}` },
+    { attackId: 'anonymous_note_update_by_id', expected: '메모 번호만 아는 로그인 없는 수정이 401 또는 403과 JSON 오류 문구로 거부됨',
+      observed: `비로그인 PUT /api/notes/:id ${await attempt('PUT', { title: 'check', body: 'check' })}` },
+    { attackId: 'anonymous_note_delete_by_id', expected: '메모 번호만 아는 로그인 없는 삭제가 401 또는 403과 JSON 오류 문구로 거부됨',
+      observed: `비로그인 DELETE /api/notes/:id ${await attempt('DELETE')}` },
   ];
 }

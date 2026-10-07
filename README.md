@@ -100,9 +100,9 @@
 
 로그인 없는 요청은 위 모든 경로에서 `401` + JSON입니다. 허용하지 않은 메서드는 `405`입니다.
 
-### 아직 남은 약점 (4단계로 넘김)
+### 3단계 당시의 약점 (소유자 검사는 4단계에서 해결, 나머지는 그대로)
 
-- **소유자 검사가 없습니다.** 로그인한 사용자는 다른 사람의 메모 UUID를 알면 `GET`·`PUT`·`DELETE /api/notes/:id`로 읽고 고치고 지울 수 있습니다. 목록은 본인 `owner_id` 메모만 돌려주지만 한 건 경로는 `owner_id`를 비교하지 않습니다. 4단계에서 서버가 `owner_id`와 토큰의 사용자 ID를 비교하도록 고칩니다. 로그인은 신원 확인일 뿐이고 접근 권한이 아닙니다.
+- **(해결됨: 4단계에서 소유자 검사를 붙임) 소유자 검사가 없었습니다.** 로그인한 사용자는 다른 사람의 메모 UUID를 알면 `GET`·`PUT`·`DELETE /api/notes/:id`로 읽고 고치고 지울 수 있습니다. 목록은 본인 `owner_id` 메모만 돌려주지만 한 건 경로는 `owner_id`를 비교하지 않습니다. 4단계에서 서버가 `owner_id`와 토큰의 사용자 ID를 비교하도록 고칩니다. 로그인은 신원 확인일 뿐이고 접근 권한이 아닙니다.
 - **이전 `notes` 테이블과 옛 공개 이력은 그대로입니다.** 2단계의 `notes` 테이블(가상 메모 네 건)은 이제 쓰이지 않지만 지우지 않았고, 옛 공개 커밋 `80aae74`와 1단계 배포의 노출도 해소되지 않았습니다.
 - 가상 메모만 쓰며, 실제 개인정보·비밀번호를 메모에 적지 않습니다.
 
@@ -121,3 +121,46 @@
 | 첫 화면에 보안 헤더 | `curl -I $APP/` → `X-Content-Type-Options: nosniff` (`vercel.json`의 `headers`) |
 
 위 세 가지는 `npm run bundle`의 직접 점검(`src/attack-check.mjs`)에서도 비로그인 요청으로 확인해 기록합니다.
+
+## 4단계: 로그인해도 내 자료만 보이게 함
+
+- **서버 소유자 검사:** `src/memo-routes.mjs`가 서버가 검증한 사용자 ID(`login.userId`)와 DB의 `owner_id`를 비교합니다. URL·본문의 `owner_id`(`ownerId`·`userId` 포함)는 믿지 않습니다.
+  - 목록(`GET /api/notes`)은 본인 `owner_id` 메모만 돌려줍니다.
+  - 추가(`POST /api/notes`)는 본문의 `owner_id`를 읽지 않고 확인된 ID로만 저장합니다.
+  - 한 건 조회·수정·삭제(`/api/notes/:id`)는 먼저 행을 읽어 `owner_id`가 본인인지 비교합니다. 쓰기 쿼리에도 `owner_id` 조건을 한 번 더 걸어 확인과 변경 사이에 소유자가 달라지는 경우도 막습니다.
+  - 남의 메모와 없는 메모는 같은 `404`로 답해 메모 번호가 존재하는지 알려 주지 않습니다.
+  - 수정 본문은 `{title,body}`만 쓰며, `owner_id`를 다른 사람 값으로 바꾸려는 수정은 `403`(`OWNER_CHANGE_NOT_ALLOWED`)으로 거부합니다.
+- **DB 권한과 RLS:** `supabase/user_notes_rls.sql`을 적용했습니다. `public`·`anon`·`authenticated`의 기존 권한을 모두 회수한 뒤 `authenticated`에만 SELECT·INSERT·UPDATE·DELETE를 주고, 정책 네 개가 모두 `auth.uid() = owner_id`일 때만 허용합니다(SELECT·DELETE는 기존 행 USING, INSERT는 새 행 WITH CHECK, UPDATE는 두 가지 모두). 앱 서버는 서버 전용 키(`service_role`)로 접근하므로 이 SQL의 영향을 받지 않고, 이 SQL은 `anon`·`authenticated` 키로 Data API를 직접 부르는 경로를 좁힙니다.
+- **소유자 연결:** `supabase/owners.local.sql`(메모 문장이 있어 Git에 올리지 않음)로 A의 가상 메모 세 건과 B의 가상 시험 메모 한 건에 올바른 소유자 ID를 연결했습니다.
+- `aleph.config.json`의 `step`은 4이고 `allowedRoutes`는 3단계와 같은 실제 경로 다섯 개입니다.
+
+### 권한 확인 결과 (적용 전후, `supabase/user_notes_grants_check.sql`)
+
+| 역할 | 적용 전 | 적용 후 |
+|---|---|---|
+| `anon` | 권한 없음 | 권한 없음 |
+| `authenticated` | 권한 없음 | SELECT·INSERT·UPDATE·DELETE만 (REFERENCES·TRIGGER·TRUNCATE 없음) |
+| `service_role` | 전체 | 전체(서버 API가 쓰는 권한, 그대로) |
+
+DB에서 직접 시험한 결과(롤백함, 시험 SQL은 계정 이메일이 있어 Git에 올리지 않음): A가 보는 B 행 0건, B가 보는 A 행 0건, 서로의 행 수정·삭제 0건, 남의 소유자로 추가·소유자 변경은 거부(42501), `anon` 읽기는 거부(42501).
+
+### 직접 확인할 것 (두 개의 시크릿 창)
+
+1. A로 로그인한 창에서 A의 메모 세 건이 보이고, B의 「B의 시험 메모」는 보이지 않는가?
+2. B로 로그인한 창에서 「B의 시험 메모」만 보이고 A의 메모는 보이지 않는가?
+3. A와 B는 각자 자기 메모를 추가·수정·삭제할 수 있는가? 5단계 뒤에도 화면에서 다시 확인합니다.
+
+### 점검 기록과 남은 약점
+
+- `npm run bundle`의 직접 점검(`src/attack-check.mjs`)은 비로그인 요청만 보냅니다. 메모 번호를 안다고 해도 로그인 없이는 조회·수정·삭제가 401 + JSON으로 거부되는지 확인합니다. **A와 B 사이의 접근은 비밀번호가 필요해 자동 점검에 넣지 못했고** 위의 직접 확인과 서버 소유자 검사 시험(`test/owner-check.test.mjs`, 가짜 DB 사용)으로 확인했습니다. 심판 신원으로 학생 메모에 접근하는 경우는 심판 환경에서만 재현되며, 서버는 심판 신원도 같은 `owner_id` 비교로 거부합니다.
+- 심판이 재현할 수 없는 `authenticated` 역할의 직접 Data API 접근은 점수에서 제외되지만 위 RLS로 막아 두었습니다. 직접 Data API 확인은 `anon` 키로만 합니다.
+- **과거 노출은 그대로입니다.** 2단계의 `notes` 테이블(가상 메모 네 건)과 옛 공개 커밋 `80aae74`, 1단계 배포의 노출은 해소되지 않았습니다. `notes` 테이블의 `owner_id`만 연결했습니다.
+- 가상 메모만 쓰며, 실제 개인정보·비밀번호를 메모에 적지 않습니다.
+
+### 100점 항목 확인 (4단계에서도 유지)
+
+| 항목 | 확인 방법 |
+|---|---|
+| 로그인 없이 목록 요청 시 401 또는 403 + JSON 오류 문구 | `curl -i $APP/api/notes` → `401`, `application/json`, `{"error":"LOGIN_REQUIRED",…}` |
+| `/aleph.json`이 열림 | `curl -s $APP/aleph.json` → `step 4`와 현재 커밋 |
+| 첫 화면에 보안 헤더 | `curl -I $APP/` → `X-Content-Type-Options: nosniff` |
