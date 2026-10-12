@@ -216,3 +216,52 @@ DB에서 직접 시험한 결과(롤백함, 시험 SQL은 계정 이메일이 �
 | `/aleph.json`에 `allowedRoutes`가 적혀 있음 | `curl -s $APP/aleph.json` → `step 5`, 현재 커밋, `allowedRoutes` 다섯 개와 `originalApiUrl`(https). `scripts/build-public.mjs`가 빌드할 때 `aleph.config.json`의 허용 경로를 담아 `public/aleph.json`을 만들며 이 파일을 지우지 않습니다. |
 | 첫 화면에 보안 헤더 | `curl -I $APP/` → `X-Content-Type-Options: nosniff` |
 | 화면 코드에 Supabase 공개 키가 없음 | `curl -s $APP/ \| grep -c sb_publishable_` → `0` |
+
+## 보너스 xdr-01: 무차별 로그인 공격 탐지
+
+Wazuh 형식의 공식 연습 경보(`xdr/fixtures/brute-force.json`, 28건, SHA256 `7F73C089…8E9563A`, 공식 시작 틀과 같음)에서 로그인 실패 무리를 찾아 행동을 정합니다. 경보 원본은 고치지 않습니다. 실제 로그가 아니라 수업용 가상 자료입니다.
+
+### 구성
+
+| 파일 | 역할 |
+|---|---|
+| `xdr/brute-force/read-alerts.mjs` | 확인용 읽기 모듈. 시각·출발 주소·계정·규칙 수준·설명만 뽑고, 비밀값처럼 보이는 값은 `[가림]`으로 바꿉니다. `decide.mjs`는 이 파일을 부르지 않습니다. |
+| `xdr/brute-force/patterns.json` | 공격 형태 세 개(이름·찾는 조건·근거 한 줄·출처, MITRE ATT&CK T1110)와 일부러 막지 않는 정상·애매한 사례 |
+| `xdr/brute-force/decide.mjs` | 제출용 판단 모듈. `decide(alert)` 하나만 내보내며 **`import`가 없는 단일 ES 모듈**이고 파일·네트워크·시계를 쓰지 않습니다. 패턴은 파일 맨 위 상수입니다. |
+| `xdr/brute-force/respond.mjs` | `block`만 만료·근거 경보 번호가 있는 추가 거부 후보(`xdr/deny-rules.json`)로 만들고, 알림을 `xdr/alerts.log`에 쌓습니다. 기존 판정 위에 거부만 덧씌우는 `applyDenyOverlay()`도 있습니다. |
+| `xdr/brute-force/result.json` | `npm run xdr:run -- brute-force` 결과(`aleph.xdr.result.v1`) |
+| `scripts/xdr-replay.mjs` | 가상 경보 시각으로 overlay를 재생하는 모의 시험 |
+| `test/brute-force.test.mjs` | 읽기·분류·복합 조건·독립 실행·차단 후보·만료·중복 방지 시험 |
+
+`xdr/alerts.log`, `xdr/deny-rules.json`, `xdr/replay-result.json`은 실행할 때마다 다시 만드는 런타임 파일이라 Git에서 제외했습니다.
+
+### 판단 기준 (학습용 기준값, MITRE의 보편 임계값 아님)
+
+| 패턴 | 기법 | 차단(block) 조건 |
+|---|---|---|
+| `same-source-failure-burst` | T1110.001 | 실패 집계 20건 이상 + 경보 수준 10 이상 + 시간 범위가 있으면 5분 이내 |
+| `multi-account-same-password` | T1110.003 | 같은 비밀번호·같은 간격·계정 이름 바꿔 대입이 계정 5개 이상 + 수준 10 이상(계정 수가 없으면 실패 10건 이상도 확인) |
+| `incremental-password-guess` | T1110.001 | 비밀번호를 조금씩 바꿔 대입 + 실패 20건 이상 + 수준 10 이상 |
+
+조건을 일부만 만족하거나 실패 3~19건이면 `alert`(0.50~0.80), 실패 1~2건이거나 실패가 없는 정상 이벤트는 `record`입니다. 0.85 이상 `block`, 0.50 이상 `alert`, 그 아래 `record`입니다. 단어·경보 수준·MITRE 태그·주소·경보 번호·순서 하나만으로는 막지 않고, 저장된 `result.json`을 정답으로 읽지 않습니다.
+
+### 실행과 실제 결과
+
+```bash
+npm run xdr:test                 # XDR 시험 14개(실행기 시험 3개 포함)
+npm run xdr:run -- brute-force   # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
+npm run xdr:replay               # 모의 overlay 재생
+node xdr/brute-force/respond.mjs # 거부 후보·알림 로그 생성
+```
+
+- 분류: **block 10 · alert 9 · record 9** (총 28건). 명확한 공격 `bf-01`~`bf-10`은 `block`, 애매한 시도 `bf-11`~`bf-19`(실패 3~8건, 실패 뒤 성공, 잠금 뒤 재시도 등)는 `alert`, 정상 이벤트 `bf-20`~`bf-28`은 `record`입니다. **정상·애매한 이벤트를 막은 경우는 없습니다.** 이 구분은 경보 설명과 수준으로 판단한 것이며 저장소에 정답표는 없습니다.
+- 모의 overlay: attackDenied 10/10, normalDenied 0, ambiguousDenied 0, expiredDenied 0
+- 차단 후보 10개: 각 경보 시각부터 15분 유효, 근거 경보 번호 포함. 같은 주소(203.0.113.10)의 경보 두 건은 각각 규칙이 되고 마지막 규칙이 끝나야 풀립니다.
+- 독립 실행: `decide.mjs` 파일 하나를 `data:` URL로 불러와도 28건 결과가 같습니다.
+
+### 연결 범위와 한계
+
+- **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
+- **ZTNA 판정기:** 이 저장소의 `src/decider.mjs`는 시작 틀 상태(모든 요청 거부, `starter.deny`)이고, 요청 계약(`docs/DECIDER_REQUEST.md`)에 검증된 출발 IP가 없습니다. 그래서 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 출발 IP를 사용자가 보낸 값·헤더에서 가져와 막지 않습니다. 추가 거부는 `applyDenyOverlay()`(맞는 유효 규칙이 없으면 기존 판정에 그대로 위임)를 모의 재생에서만 검증했고, 실제 접속 허용·회수로 보고하지 않습니다.
+- 내부망·루프백 주소, 같은 주소에 정상 이벤트가 있는 경우, 시각·근거 번호가 없는 경보는 차단 후보로 만들지 않습니다.
+- 기준값은 공식 경보 28건과 길라잡이의 학습 기준에 맞춘 것이라, 다른 경보 묶음에서는 오분류가 있을 수 있습니다. 로컬 시험 통과는 심판 통과가 아니며, 판정은 심판이 다시 실행해 확인합니다.

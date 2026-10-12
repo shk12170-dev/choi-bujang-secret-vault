@@ -1,0 +1,36 @@
+{
+  "schema": "aleph.xdr.patterns.v1",
+  "moduleKey": "brute-force",
+  "source": "MITRE ATT&CK T1110 Brute Force (https://attack.mitre.org/techniques/T1110/)",
+  "note": "아래 숫자는 이 학습 구현의 기준값이며 MITRE가 정한 보편 임계값이 아니다. 차단은 구조 근거·반복 집계·경보 수준을 함께 만족할 때만 내리고, 단어·수준·MITRE 태그·주소·경보 번호 하나만으로 막지 않는다.",
+  "patterns": [
+    {
+      "id": "same-source-failure-burst",
+      "name": "같은 주소의 짧은 시간 로그인 실패 연속",
+      "technique": "T1110.001",
+      "condition": "같은 출발 주소·계정의 로그인 실패 집계가 20건 이상이고 경보 수준 10 이상이며, 설명에 시간 범위가 있으면 5분 이내일 때 차단 후보. 실패 3~19건은 알림, 실패 뒤 성공은 확신도를 조금 낮춘다.",
+      "evidence": "T1110.001 Password Guessing: 공격자가 비밀번호를 추측해 같은 계정에 반복해서 대입하므로 짧은 시간의 실패 연속이 대표 신호다.",
+      "reference": "https://attack.mitre.org/techniques/T1110/001/"
+    },
+    {
+      "id": "multi-account-same-password",
+      "name": "여러 계정에 같은 비밀번호를 대입",
+      "technique": "T1110.003",
+      "condition": "같은 출발 주소가 계정 5개 이상에 같은 비밀번호·같은 간격·계정 이름 바꿔 가며 대입하고 경보 수준 10 이상일 때 차단 후보. 계정 수가 목록·숫자로 없고 '여러 계정'만 있으면 실패 집계 10건 이상도 함께 본다. 두세 계정은 알림.",
+      "evidence": "T1110.003 Password Spraying: 잠금을 피하려고 많은 계정에 흔한 비밀번호 하나씩만 대입하는 방식이다.",
+      "reference": "https://attack.mitre.org/techniques/T1110/003/"
+    },
+    {
+      "id": "incremental-password-guess",
+      "name": "비밀번호를 조금씩 바꿔 가며 대입",
+      "technique": "T1110.001",
+      "condition": "같은 계정에 비밀번호를 한 글자씩 바꾸는 식으로 변형해 연속 대입하고, 실패 20건 이상·경보 수준 10 이상일 때 차단 후보. 그보다 적으면 알림.",
+      "evidence": "T1110.001 Password Guessing: 알려진 비밀번호의 변형을 체계적으로 추측하는 것도 같은 기법에 속한다.",
+      "reference": "https://attack.mitre.org/techniques/T1110/001/"
+    }
+  ],
+  "notBlockedOnPurpose": [
+    "실패 1건 뒤 성공, 로그인 성공, 로그아웃, 세션 유지, 비밀번호 변경 성공: 정상 이벤트라 기록(record)만 남긴다.",
+    "실패 3~8건, 실패 몇 건 뒤 성공, 잠금 뒤 재시도, 비밀번호 변경 화면의 현재 비밀번호 실패: 사용자의 오타일 수 있는 애매한 사례라 알림(alert)으로만 남긴다. 실제 운영에서는 많은 실패 뒤 성공도 공격 신호일 수 있어 이 연습의 소량 실패 예외를 모든 로그에 적용하지 않는다."
+  ]
+}
