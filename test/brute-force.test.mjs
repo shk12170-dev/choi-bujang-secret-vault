@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { replay } from '../scripts/xdr-replay.mjs';
+import * as bruteForceModule from '../xdr/brute-force/respond.mjs';
 import { decide } from '../xdr/brute-force/decide.mjs';
 import { readAlerts } from '../xdr/brute-force/read-alerts.mjs';
 import { applyDenyOverlay, isDeniedAddress, respond } from '../xdr/brute-force/respond.mjs';
@@ -131,7 +132,7 @@ test('차단 후보는 block만, 15분 만료와 근거 번호가 있고 다른 
 });
 
 test('모의 재생: 공격만 막히고 정상·애매한 주소는 통과하며 만료 뒤 기존 판정으로 돌아간다', async () => {
-  const result = await replay(fixture.alerts);
+  const result = await replay([{ module: bruteForceModule, alerts: fixture.alerts }]);
   assert.deepEqual(
     { attackDenied: result.attackDenied, attackTotal: result.attackTotal, normalDenied: result.normalDenied, ambiguousDenied: result.ambiguousDenied, expiredDenied: result.expiredDenied },
     { attackDenied: 10, attackTotal: 10, normalDenied: 0, ambiguousDenied: 0, expiredDenied: 0 },
