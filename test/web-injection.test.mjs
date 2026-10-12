@@ -81,7 +81,18 @@ test('패턴 목록은 근거가 한 줄씩 있고 결정 모듈의 상수와 �
     assert.ok(pattern.name && pattern.condition, pattern.id);
     assert.ok(typeof pattern.evidence === 'string' && pattern.evidence.trim().length > 10 && !pattern.evidence.includes('\n'), pattern.id);
     assert.equal(pattern.technique, 'T1190');
-    assert.ok(decideSource.includes(`id: '${pattern.id}'`) && decideSource.includes(pattern.name), pattern.id);
+    // decide.mjs 맨 위 상수에 이름·조건·근거가 그대로 옮겨져 있다.
+    for (const field of ['name', 'condition', 'evidence']) assert.ok(decideSource.includes(pattern[field]), `${pattern.id}.${field}`);
+    assert.ok(decideSource.includes(`id: '${pattern.id}'`), pattern.id);
+  }
+});
+
+test('모든 판단의 reason에 근거 패턴 이름이 한 줄로 들어 있다', async () => {
+  const patterns = JSON.parse(await readFile(new URL('../xdr/web-injection/patterns.json', import.meta.url), 'utf8'));
+  for (const alert of fixture.alerts) {
+    const { reason } = decide(alert);
+    assert.ok(patterns.patterns.some(pattern => reason.includes(pattern.id)), `${alert.id}: ${reason}`);
+    assert.ok(!reason.includes('\n') && reason.length <= 200, alert.id);
   }
 });
 

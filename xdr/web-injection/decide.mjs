@@ -9,21 +9,29 @@ const PATTERNS = Object.freeze([
     id: 'sql-injection',
     name: '요청 인자 안의 SQL 구문',
     technique: 'T1190',
+    condition: '요청 인자에 SQL 구문을 이어 붙이거나 조건을 덧붙인 구조(예: union·select 연결, 따옴표 뒤 or 조건, 주석·구문 종료)가 있거나 센서가 SQL 구문 표기를 검출했고, 같은 주소에서 5번 이상 반복되며 경보 수준 10 이상일 때 차단 후보. 반복이 없으면 알림.',
+    evidence: 'T1190: 공개 웹 앱의 입력 처리 약점에 SQL 구문을 넣어 데이터베이스를 조작하는 SQL 주입이 대표 악용 방식이다(예: MOVEit CVE-2023-34362).',
   }),
   Object.freeze({
     id: 'script-injection',
     name: '요청 인자 안의 스크립트 태그',
     technique: 'T1190',
+    condition: '요청 인자에 script 태그·이벤트 처리기(onerror 등)·javascript: 같은 스크립트 삽입 구조가 있거나 센서가 스크립트 삽입 표식을 검출했고, 같은 주소에서 5번 이상 반복되며 경보 수준 10 이상일 때 차단 후보. 「스크립트」라는 수업 단어처럼 삽입 표식이 아닌 경우는 구조로 보지 않는다.',
+    evidence: 'T1190: 공개 웹 앱이 입력을 걸러 내지 못하는 약점을 노려 스크립트를 삽입하는 것도 외부 공개 앱 악용에 속한다(OWASP Top 10 Injection).',
   }),
   Object.freeze({
     id: 'path-traversal',
     name: '경로 거슬러 올라가기(../) 반복',
     technique: 'T1190',
+    condition: '요청 인자에 ../ 또는 그 인코딩이 두 단계 이상 이어지거나 센서가 경로 이탈 표기를 검출했고, 같은 주소에서 5번 이상 반복되며 경보 수준 10 이상일 때 차단 후보. 「up」 같은 글자 한 번은 구조로 보지 않는다.',
+    evidence: 'T1190: 공개 웹 앱의 파일 경로 처리 약점을 이용해 허용되지 않은 위치의 파일을 읽는 경로 이탈(CWE-22)도 외부 공개 앱 악용 방식이다.',
   }),
   Object.freeze({
     id: 'command-injection',
     name: '요청 인자 안의 명령 구분자',
     technique: 'T1190',
+    condition: '요청 인자에 명령 구분자(; | && $( `)와 명령어가 이어지거나 센서가 명령 구분자 표기를 검출했고, 같은 주소에서 5번 이상 반복되며 경보 수준 10 이상일 때 차단 후보. 이름 검색의 구분 문자 한 번은 알림.',
+    evidence: 'T1190: 공개 웹 앱이 입력을 시스템 명령에 그대로 넘기는 약점(OS 명령 주입, CWE-78)을 악용하는 것도 외부 공개 앱 악용 방식이다.',
   }),
 ]);
 
@@ -87,6 +95,22 @@ function readSignals(alert) {
   return { level, repeats, structures };
 }
 
+const ALL_NAMES = `패턴 ${PATTERNS.map(pattern => pattern.id).join('·')}`;
+
+// 차단 근거가 아니라 이유 문구에 가장 가까운 패턴 이름을 적기 위한 약한 신호(단어·문자 하나)입니다.
+const WEAK_HINTS = Object.freeze({
+  'sql-injection': /따옴표|select|sql|union|데이터베이스|'/iu,
+  'script-injection': /스크립트|script|[<>]/iu,
+  'path-traversal': /경로|\.\.|(^|[^a-z])up([^a-z]|$)/iu,
+  'command-injection': /구분\s*문자|구분자|명령|[;|&`]/u,
+});
+
+function weakHint(alert) {
+  const description = typeof alert?.rule?.description === 'string' ? alert.rule.description.slice(0, 500) : '';
+  const url = decodeUrl(alert?.data?.url);
+  return PATTERNS.find(pattern => WEAK_HINTS[pattern.id].test(description) || WEAK_HINTS[pattern.id].test(url)) ?? null;
+}
+
 function actionFor(confidence) {
   if (confidence >= BLOCK_AT) return 'block';
   if (confidence >= ALERT_AT) return 'alert';
@@ -118,7 +142,12 @@ export function decide(alert) {
 
   // 주입 구조는 보이지 않지만 센서가 눈여겨볼 수준으로 남긴 웹 경보는 애매한 사례로 알림만 남깁니다.
   if (level >= SENSOR_NOTABLE_LEVEL) {
-    return { action: 'alert', confidence: 0.55, reason: `주입 구조·반복 근거가 약한 웹 경보라 알림만 남김: ${evidence}` };
+    // 구조는 확인되지 않았지만 단어·문자가 닮은 패턴이 있으면 그 패턴 이름을 근거로 적습니다(차단 근거는 아님).
+    const hint = weakHint(alert);
+    const reason = hint
+      ? `${hint.name} [${hint.id}, ${hint.technique}] 의심 신호뿐(구조·반복 근거 부족)이라 알림만 남김: ${evidence}`
+      : `${ALL_NAMES} 어느 구조도 확인되지 않은 웹 경보라 알림만 남김: ${evidence}`;
+    return { action: 'alert', confidence: 0.55, reason };
   }
-  return { action: 'record', confidence: 0.1, reason: `주입 패턴과 맞지 않아 기록만 남김: ${evidence}` };
+  return { action: 'record', confidence: 0.1, reason: `${ALL_NAMES} 어느 패턴과도 맞지 않아 기록만 남김: ${evidence}` };
 }
