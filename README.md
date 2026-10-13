@@ -225,12 +225,12 @@ Wazuh 형식의 공식 연습 경보(`xdr/fixtures/brute-force.json`, 28건, SHA
 
 | 파일 | 역할 |
 |---|---|
-| `xdr/brute-force/read-alerts.mjs` | 확인용 읽기 모듈. 시각·출발 주소·계정·규칙 수준·설명만 뽑고, 비밀값처럼 보이는 값은 `[가림]`으로 바꿉니다. `decide.mjs`는 이 파일을 부르지 않습니다. |
+| `xdr/brute-force/read-alerts.mjs` | 확인용 읽기 모듈(공통 구현 `xdr/read-alerts.mjs`). 시각·출발 주소·계정·규칙 수준·설명만 뽑고, 비밀값처럼 보이는 값은 `[가림]`으로 바꿉니다. `decide.mjs`는 이 파일을 부르지 않습니다. |
 | `xdr/brute-force/patterns.json` | 공격 형태 세 개(이름·찾는 조건·근거 한 줄·출처, MITRE ATT&CK T1110)와 일부러 막지 않는 정상·애매한 사례 |
 | `xdr/brute-force/decide.mjs` | 제출용 판단 모듈. `decide(alert)` 하나만 내보내며 **`import`가 없는 단일 ES 모듈**이고 파일·네트워크·시계를 쓰지 않습니다. 패턴은 파일 맨 위 상수입니다. |
-| `xdr/brute-force/respond.mjs` | `block`만 만료·근거 경보 번호가 있는 추가 거부 후보(`xdr/deny-rules.json`)로 만들고, 알림을 `xdr/alerts.log`에 쌓습니다. 기존 판정 위에 거부만 덧씌우는 `applyDenyOverlay()`도 있습니다. |
+| `xdr/brute-force/respond.mjs` | `block`만 만료·근거 경보 번호가 있는 추가 거부 후보(`xdr/deny-rules.json`)로 만들고 알림을 `xdr/alerts.log`에 쌓습니다(공통 구현 `xdr/ztna-overlay.mjs`, 기존 판정 위에 거부만 덧씌우는 `applyDenyOverlay()` 포함). |
 | `xdr/brute-force/result.json` | `npm run xdr:run -- brute-force` 결과(`aleph.xdr.result.v1`) |
-| `scripts/xdr-replay.mjs` | 가상 경보 시각으로 overlay를 재생하는 모의 시험 |
+| `scripts/xdr-replay.mjs` | 가상 경보 시각으로 두 보너스 모듈의 overlay를 함께 재생하는 모의 시험 |
 | `test/brute-force.test.mjs` | 읽기·분류·복합 조건·독립 실행·차단 후보·만료·중복 방지 시험 |
 
 `xdr/alerts.log`, `xdr/deny-rules.json`, `xdr/replay-result.json`은 실행할 때마다 다시 만드는 런타임 파일이라 Git에서 제외했습니다.
@@ -248,14 +248,14 @@ Wazuh 형식의 공식 연습 경보(`xdr/fixtures/brute-force.json`, 28건, SHA
 ### 실행과 실제 결과
 
 ```bash
-npm run xdr:test                 # XDR 시험 14개(실행기 시험 3개 포함)
+npm run xdr:test                 # XDR 시험 24개(XDR-01 11개, XDR-02 10개, 실행기 3개)
 npm run xdr:run -- brute-force   # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
-npm run xdr:replay               # 모의 overlay 재생
+npm run xdr:replay               # 두 모듈 모의 overlay 재생
 node xdr/brute-force/respond.mjs # 거부 후보·알림 로그 생성
 ```
 
 - 분류: **block 10 · alert 9 · record 9** (총 28건). 명확한 공격 `bf-01`~`bf-10`은 `block`, 애매한 시도 `bf-11`~`bf-19`(실패 3~8건, 실패 뒤 성공, 잠금 뒤 재시도 등)는 `alert`, 정상 이벤트 `bf-20`~`bf-28`은 `record`입니다. **정상·애매한 이벤트를 막은 경우는 없습니다.** 이 구분은 경보 설명과 수준으로 판단한 것이며 저장소에 정답표는 없습니다.
-- 모의 overlay: attackDenied 10/10, normalDenied 0, ambiguousDenied 0, expiredDenied 0
+- 모의 overlay(XDR-01만): attackDenied 10/10, normalDenied 0, ambiguousDenied 0, expiredDenied 0. 두 모듈을 함께 재생한 결과는 아래 XDR-02 절에 있습니다.
 - 차단 후보 10개: 각 경보 시각부터 15분 유효, 근거 경보 번호 포함. 같은 주소(203.0.113.10)의 경보 두 건은 각각 규칙이 되고 마지막 규칙이 끝나야 풀립니다.
 - 독립 실행: `decide.mjs` 파일 하나를 `data:` URL로 불러와도 28건 결과가 같습니다.
 
@@ -265,3 +265,53 @@ node xdr/brute-force/respond.mjs # 거부 후보·알림 로그 생성
 - **ZTNA 판정기:** 이 저장소의 `src/decider.mjs`는 시작 틀 상태(모든 요청 거부, `starter.deny`)이고, 요청 계약(`docs/DECIDER_REQUEST.md`)에 검증된 출발 IP가 없습니다. 그래서 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 출발 IP를 사용자가 보낸 값·헤더에서 가져와 막지 않습니다. 추가 거부는 `applyDenyOverlay()`(맞는 유효 규칙이 없으면 기존 판정에 그대로 위임)를 모의 재생에서만 검증했고, 실제 접속 허용·회수로 보고하지 않습니다.
 - 내부망·루프백 주소, 같은 주소에 정상 이벤트가 있는 경우, 시각·근거 번호가 없는 경보는 차단 후보로 만들지 않습니다.
 - 기준값은 공식 경보 28건과 길라잡이의 학습 기준에 맞춘 것이라, 다른 경보 묶음에서는 오분류가 있을 수 있습니다. 로컬 시험 통과는 심판 통과가 아니며, 판정은 심판이 다시 실행해 확인합니다.
+
+## 보너스 xdr-02: 웹 주입 공격 탐지
+
+Wazuh 형식의 공식 연습 경보(`xdr/fixtures/web-injection.json`, 26건, SHA256 `52CB9255…FAB39AD0`, 공식 시작 틀과 같음)에서 웹 요청에 섞인 주입 시도를 가려 행동을 정합니다. 경보 원본은 고치지 않습니다. 공식 경보의 요청 주소에는 실제 공격 문자열 대신 문서용 표기(`doc-sql-chain` 등)가 들어 있습니다.
+
+### 구성
+
+| 파일 | 역할 |
+|---|---|
+| `xdr/web-injection/read-alerts.mjs` | 확인용 읽기 모듈(공통 구현 `xdr/read-alerts.mjs`). 시각·출발 주소·계정·규칙 수준·설명만 뽑고 **요청 주소 원문은 내보내지 않습니다.** `decide.mjs`는 이 파일을 부르지 않습니다. |
+| `xdr/web-injection/patterns.json` | 공격 형태 네 개(이름·찾는 조건·근거 한 줄·출처, MITRE ATT&CK T1190)와 일부러 막지 않는 정상·애매한 사례 |
+| `xdr/web-injection/decide.mjs` | 제출용 판단 모듈. `decide(alert)` 하나만 내보내며 **`import`가 없는 단일 ES 모듈**이고 파일·네트워크·시계를 쓰지 않습니다. 패턴은 파일 맨 위 상수입니다. |
+| `xdr/web-injection/respond.mjs` | `block`만 15분 만료·근거 경보 번호가 있는 추가 거부 후보로 `xdr/deny-rules.json`에 넣고(XDR-01 규칙 보존), 알림을 `xdr/alerts.log`에 계정·요청 주소 원문 없이 쌓습니다. |
+| `xdr/web-injection/result.json` | `npm run xdr:run -- web-injection` 결과(`aleph.xdr.result.v1`) |
+| `xdr/read-alerts.mjs`, `xdr/ztna-overlay.mjs` | 두 모듈이 함께 쓰는 읽기·차단 연결 공통 부품(XDR-01도 같은 부품을 쓰도록 정리했고 XDR-01의 `decide.mjs`와 결과는 바뀌지 않음) |
+| `test/web-injection.test.mjs` | 읽기·분류·단어 하나로 막지 않음·실제 구문 변형·독립 실행·차단 후보·두 모듈 겹침과 만료 시험 |
+
+### 패턴과 판단 기준 (학습용 기준값, MITRE의 보편 임계값 아님)
+
+| 패턴 | 찾는 구조 |
+|---|---|
+| `sql-injection` | SQL 구문을 이어 붙이거나 조건을 덧붙인 구조(union·select 연결, 따옴표 뒤 or 조건, 주석 등) 또는 센서의 SQL 구문 표기 |
+| `script-injection` | script 태그·이벤트 처리기·`javascript:` 또는 센서의 스크립트 삽입 표식 |
+| `path-traversal` | `../`(또는 인코딩)가 두 단계 이상 이어지는 구조 또는 센서의 경로 이탈 표기 |
+| `command-injection` | 명령 구분자(`;` `\|` `&&` `$(`)와 명령어 또는 센서의 명령 구분자 표기 (근거 T1190·CWE-78) |
+
+- **차단(block):** 주입 구조 + 같은 주소의 반복 5번 이상 + 경보 수준 10 이상 (0.90~0.97)
+- **알림(alert):** 구조는 있으나 반복이 적거나 수준이 낮은 경우(0.60~0.70), 또는 구조는 없지만 센서가 수준 5 이상으로 남긴 웹 경보(0.55)
+- **기록(record):** 구조가 없고 수준 4 이하인 정상 조회(0.10)
+
+요청 주소는 2048자로 자르고 최대 두 번 디코딩해 소문자 문자열로만 검사하며, SQL·스크립트·명령을 실행하지 않습니다. 센서 설명은 부정하는 문장("삽입 표식은 아닙니다", "반복은 없습니다")을 구조 근거로 쓰지 않습니다. `select`·`script`·`SQL`이라는 수업명·공지 제목, 경보 수준, MITRE 태그, 주소, 경보 번호 하나만으로는 막지 않습니다.
+
+### 실행과 실제 결과
+
+```bash
+npm run xdr:run -- web-injection   # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
+npm run xdr:replay                 # 두 모듈 모의 overlay 재생
+node xdr/web-injection/respond.mjs # 거부 후보·알림 로그 생성
+```
+
+- 분류: **block 8 · alert 9 · record 9** (총 26건). 명확한 공격 `wi-01`~`wi-08`(구조 + 8~20번 반복 + 수준 10~12)은 `block`, 애매한 시도 `wi-09`~`wi-17`(1건뿐인 표기, 수업명·공지 제목, 긴 주소 등)은 `alert`, 정상 조회 `wi-18`~`wi-26`은 `record`입니다. **정상·애매한 이벤트를 막은 경우는 없습니다.** 이 구분은 경보 설명·요청 구조·반복·수준으로 판단한 것이며 저장소에 정답표는 없습니다.
+- 두 모듈 모의 overlay: **attackDenied 18(XDR-01 10 + XDR-02 8), normalDenied 0, ambiguousDenied 0, expiredDenied 0**
+- 두 모듈 규칙이 겹친 주소 `203.0.113.10`(bf-01·bf-02·wi-01)은 먼저 끝난 규칙 뒤에도 다른 모듈 규칙이 유효하면 계속 거부되고, 마지막 규칙이 끝나야 기존 판정으로 돌아갑니다.
+- 독립 실행: `decide.mjs` 파일 하나를 `data:` URL로 불러와도 26건 결과가 같습니다.
+
+### 연결 범위와 한계
+
+- **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
+- **ZTNA 판정기:** XDR-01과 같습니다. `src/decider.mjs`는 시작 틀 상태이고 요청 계약에 검증된 출발 IP가 없어 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 추가 거부는 모의 재생에서만 검증했고 실제 접속 허용·회수로 보고하지 않습니다.
+- 공식 경보의 요청 주소는 문서용 표기라 센서 설명과 반복 집계를 함께 읽습니다. 실제 구문 형태(인코딩된 script 태그, `../` 반복, union select 등)는 시험의 변형 사례로만 확인했습니다. 다른 경보 묶음에서는 오분류가 있을 수 있으며, 로컬 시험 통과는 심판 통과가 아닙니다.

@@ -1,0 +1,44 @@
+{
+  "schema": "aleph.xdr.patterns.v1",
+  "moduleKey": "web-injection",
+  "source": "MITRE ATT&CK T1190 Exploit Public-Facing Application (https://attack.mitre.org/techniques/T1190/)",
+  "note": "아래 숫자는 이 학습 구현의 기준값이며 MITRE가 정한 보편 임계값이 아니다. 차단은 주입 구조 근거·같은 주소의 반복 집계·경보 수준을 함께 만족할 때만 내린다. select·script·SQL 같은 단어 하나, 경보 수준, MITRE 태그, 주소, 경보 번호 하나만으로는 막지 않는다. 요청 주소는 길이를 제한하고 최대 두 번 디코딩해 문자열로만 검사하며 SQL·스크립트·명령을 실행하지 않는다.",
+  "patterns": [
+    {
+      "id": "sql-injection",
+      "name": "요청 인자 안의 SQL 구문",
+      "technique": "T1190",
+      "condition": "요청 인자에 SQL 구문을 이어 붙이거나 조건을 덧붙인 구조(예: union·select 연결, 따옴표 뒤 or 조건, 주석·구문 종료)가 있거나 센서가 SQL 구문 표기를 검출했고, 같은 주소에서 5번 이상 반복되며 경보 수준 10 이상일 때 차단 후보. 반복이 없으면 알림.",
+      "evidence": "T1190: 공개 웹 앱의 입력 처리 약점에 SQL 구문을 넣어 데이터베이스를 조작하는 SQL 주입이 대표 악용 방식이다(예: MOVEit CVE-2023-34362).",
+      "reference": "https://attack.mitre.org/techniques/T1190/"
+    },
+    {
+      "id": "script-injection",
+      "name": "요청 인자 안의 스크립트 태그",
+      "technique": "T1190",
+      "condition": "요청 인자에 script 태그·이벤트 처리기(onerror 등)·javascript: 같은 스크립트 삽입 구조가 있거나 센서가 스크립트 삽입 표식을 검출했고, 같은 주소에서 5번 이상 반복되며 경보 수준 10 이상일 때 차단 후보. 「스크립트」라는 수업 단어처럼 삽입 표식이 아닌 경우는 구조로 보지 않는다.",
+      "evidence": "T1190: 공개 웹 앱이 입력을 걸러 내지 못하는 약점을 노려 스크립트를 삽입하는 것도 외부 공개 앱 악용에 속한다(OWASP Top 10 Injection).",
+      "reference": "https://attack.mitre.org/techniques/T1190/"
+    },
+    {
+      "id": "path-traversal",
+      "name": "경로 거슬러 올라가기(../) 반복",
+      "technique": "T1190",
+      "condition": "요청 인자에 ../ 또는 그 인코딩이 두 단계 이상 이어지거나 센서가 경로 이탈 표기를 검출했고, 같은 주소에서 5번 이상 반복되며 경보 수준 10 이상일 때 차단 후보. 「up」 같은 글자 한 번은 구조로 보지 않는다.",
+      "evidence": "T1190: 공개 웹 앱의 파일 경로 처리 약점을 이용해 허용되지 않은 위치의 파일을 읽는 경로 이탈(CWE-22)도 외부 공개 앱 악용 방식이다.",
+      "reference": "https://attack.mitre.org/techniques/T1190/"
+    },
+    {
+      "id": "command-injection",
+      "name": "요청 인자 안의 명령 구분자",
+      "technique": "T1190",
+      "condition": "요청 인자에 명령 구분자(; | && $( `)와 명령어가 이어지거나 센서가 명령 구분자 표기를 검출했고, 같은 주소에서 5번 이상 반복되며 경보 수준 10 이상일 때 차단 후보. 이름 검색의 구분 문자 한 번은 알림.",
+      "evidence": "T1190: 공개 웹 앱이 입력을 시스템 명령에 그대로 넘기는 약점(OS 명령 주입, CWE-78)을 악용하는 것도 외부 공개 앱 악용 방식이다.",
+      "reference": "https://attack.mitre.org/techniques/T1190/"
+    }
+  ],
+  "notBlockedOnPurpose": [
+    "정상 조회(자료 목록, 내 메모, 공지, 검색어, 파일 이름, 새로고침, 로그아웃): 기록(record)만 남긴다.",
+    "주입처럼 보이는 표기 1건, 따옴표·구분 문자 1건, select·script·SQL이라는 수업명·공지 제목, 평소보다 긴 주소, 'up' 글자 한 번: 반복이 없거나 구조가 아닌 애매한 사례라 알림(alert)으로만 남긴다."
+  ]
+}

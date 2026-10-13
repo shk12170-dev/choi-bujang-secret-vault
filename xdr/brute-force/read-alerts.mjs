@@ -1,50 +1,16 @@
-// 제작 1: Wazuh 경보에서 시각·출발 주소·계정·규칙 수준·설명만 뽑는 확인용 읽기 모듈입니다.
-// decide.mjs가 불러오지 않는 별도 파일이며, 원본 경보는 고치지 않습니다.
-// 비밀값처럼 보이는 문자열은 출력에 포함하지 않고 [가림]으로 바꿉니다.
-import { readFileSync } from 'node:fs';
+// 제작 1: 무차별 로그인 경보에서 시각·출발 주소·계정·규칙 수준·설명만 뽑는 확인용 읽기 모듈입니다.
+// 공통 구현은 xdr/read-alerts.mjs에 있고(비밀값처럼 보이는 문자열은 [가림]), decide.mjs는 이 파일을 부르지 않습니다.
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { formatRow, printAlerts, readAlerts } from '../read-alerts.mjs';
 
-const MASK = '[가림]';
-const SECRET_LIKE = new RegExp([
-  '(?:password|passwd|pwd|token|secret|apikey|api_key|authorization|bearer)\\s*[:=]\\s*\\S+',
-  'eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{6,}',
-  'sb_(?:secret|publishable)_\\S+',
-  '\\b[A-Fa-f0-9]{32,}\\b',
-  '-----BEGIN[^\\n]*',
-].join('|'), 'giu');
-
-const mask = value => (typeof value === 'string' ? value.replace(SECRET_LIKE, MASK) : value);
-const text = value => (typeof value === 'string' && value.trim() ? mask(value.trim()) : '-');
-
-export function readAlerts(fixturePath) {
-  const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
-  if (fixture?.schema !== 'aleph.xdr.fixture.v1' || !Array.isArray(fixture.alerts)) {
-    throw new Error('경보 묶음 형식이 아닙니다.');
-  }
-  return fixture.alerts.map(alert => ({
-    id: text(alert?.id),
-    at: text(alert?.timestamp),
-    srcip: text(alert?.data?.srcip),
-    account: text(alert?.data?.srcuser),
-    level: Number.isInteger(alert?.rule?.level) ? alert.rule.level : null,
-    description: text(alert?.rule?.description),
-  }));
-}
-
-export const formatRow = row =>
-  [row.id, row.at, row.srcip, row.account, `수준 ${row.level ?? '-'}`, row.description].join(' | ');
+export { formatRow, readAlerts };
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 if (isMain) {
   const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const path = process.argv[2] ?? join(root, 'xdr', 'fixtures', 'brute-force.json');
   try {
-    const rows = readAlerts(path);
-    const total = JSON.parse(readFileSync(path, 'utf8')).alerts.length;
-    for (const row of rows) console.log(formatRow(row));
-    console.log(`경보 ${total}건 / 뽑은 줄 ${rows.length}줄 / ${total === rows.length ? '건수 일치' : '건수 불일치'}`);
-    if (total !== rows.length) process.exitCode = 1;
+    if (!printAlerts(process.argv[2] ?? join(root, 'xdr', 'fixtures', 'brute-force.json'))) process.exitCode = 1;
   } catch (error) {
     console.error(error instanceof Error ? error.message : '읽기 오류');
     process.exitCode = 1;
