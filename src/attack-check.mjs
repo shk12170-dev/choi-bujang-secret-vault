@@ -5,6 +5,7 @@ export async function runAttackChecks(config) {
   if (config.step === 3) return runStep3Checks(config);
   if (config.step === 4) return runStep4Checks(config);
   if (config.step === 5) return runStep5Checks(config);
+  if (config.step === 6) return runStep6Checks(config);
   if (config.step !== 1) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   let app;
   try {
@@ -239,5 +240,35 @@ async function runStep5Checks(config) {
       observed: `키 없는 직접 GET ${originalStatus}, 메모 ${originalLeak ? '노출됨' : '없음'}` },
     { attackId: 'auth_proxy_empty_login', expected: '서버 로그인 함수가 빈 요청을 4xx와 JSON 오류 문구로 거부함',
       observed: `빈 POST /api/auth/login HTTP ${emptyLogin.status}, 오류 문구 ${loginError ? '있음' : '없음'}` },
+  ];
+}
+
+// 6단계: 5단계 점검에 더해, 판정기의 기기 등록 규칙을 가상 요청으로 직접 호출해 점검합니다.
+// 이 부분은 배포 주소가 아니라 이 저장소의 src/decider.mjs를 부르는 로컬 연습이며 심판 판정이 아닙니다.
+// 반 엔진이 실제 기기·인증서를 확인하는 경로와 미등록 기기 공격은 심판이 시험합니다.
+async function runStep6Checks(config) {
+  const previous = await runStep5Checks(config);
+  const { randomUUID } = await import('node:crypto');
+  const { fixtureRequests } = await import('../scripts/fixture-7.mjs');
+  const { decide, RULE_IDS } = await import('./decider.mjs');
+  const { normal } = fixtureRequests();
+  const withoutDevice = (({ deviceRegistered: _removed, ...rest }) => ({ ...rest, requestId: randomUUID() }))(normal);
+
+  const describe = async request => {
+    const out = await decide(request);
+    const shapeOk = out && typeof out === 'object' && out.schema === 'aleph.decision.v1' && out.requestId === request.requestId
+      && Object.keys(out).sort().join(',') === 'decision,reasonCode,requestId,ruleIds,schema'
+      && Array.isArray(out.ruleIds) && out.ruleIds.length > 0 && out.ruleIds.every(id => RULE_IDS.includes(id));
+    return `decision=${out?.decision} reasonCode=${out?.reasonCode} 규칙=${(out?.ruleIds ?? []).join(',')} (응답 형식 ${shapeOk ? '맞음' : '틀림'})`;
+  };
+
+  return [
+    ...previous,
+    { attackId: 'decider_registered_device_read', expected: '등록 기기의 정상 읽기 요청이 allow',
+      observed: `로컬 가상 요청 deviceRegistered=true: ${await describe({ ...normal, requestId: randomUUID() })}` },
+    { attackId: 'decider_unregistered_device', expected: '미등록 기기의 가상 요청이 deny와 이유 코드 device_not_registered',
+      observed: `로컬 가상 요청 deviceRegistered=false: ${await describe({ ...normal, requestId: randomUUID(), deviceRegistered: false })}` },
+    { attackId: 'decider_device_value_missing', expected: '기기 등록 값이 없는 요청이 deny와 이유 코드 device_not_registered',
+      observed: `로컬 가상 요청 deviceRegistered 없음: ${await describe(withoutDevice)}` },
   ];
 }

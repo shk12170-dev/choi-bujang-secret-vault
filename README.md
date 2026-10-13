@@ -315,3 +315,53 @@ node xdr/web-injection/respond.mjs # 거부 후보·알림 로그 생성
 - **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
 - **ZTNA 판정기:** XDR-01과 같습니다. `src/decider.mjs`는 시작 틀 상태이고 요청 계약에 검증된 출발 IP가 없어 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 추가 거부는 모의 재생에서만 검증했고 실제 접속 허용·회수로 보고하지 않습니다.
 - 공식 경보의 요청 주소는 문서용 표기라 센서 설명과 반복 집계를 함께 읽습니다. 실제 구문 형태(인코딩된 script 태그, `../` 반복, union select 등)는 시험의 변형 사례로만 확인했습니다. 다른 경보 묶음에서는 오분류가 있을 수 있으며, 로컬 시험 통과는 심판 통과가 아닙니다.
+
+## 6단계: 등록한 기기만 자료실에 들어옴
+
+- **규칙 하나를 판정기에 더했습니다.** `src/decider.mjs`의 규칙 `device_registered`(`RULE_IDS`에 `starter.deny`와 함께 등록)는 판정 요청의 `deviceRegistered`가 정확히 `true`일 때만 다음 조건을 봅니다. 값이 `false`이거나 없거나 `true`가 아닌 형태(문자열 `"true"`, 숫자 `1` 등)이면 `deny`와 이유 코드 `device_not_registered`로 거부합니다. 등록 기기의 읽기(`method`가 `GET`)는 `allow`(이유 코드 `approved`)이고, 그 밖의 요청은 아직 허용하는 규칙이 없어 기본 거부(`starter.deny`)입니다.
+- **계약에 있는 이름만 읽습니다.** 판정기는 `docs/DECIDER_REQUEST.md`의 `requestId`, `deviceRegistered`, `method`만 읽습니다. 브라우저가 보낸 사용자 번호·역할·기기 상태나 계약에 없는 값(`identity`, `device`, `role`, `geo`)은 읽지 않고 임의 상수로 채우지 않습니다. 응답은 5개 이름(`schema`, `requestId`, `decision`, `reasonCode`, `ruleIds`)만 담고 `ruleIds`는 항상 `RULE_IDS`에 있는 이름입니다.
+- **기존 자료실은 그대로입니다.** 자료실 주소·브라우저 화면·로그인·메모 API는 이번 단계에서 바꾸지 않았습니다. 이번 단계에는 설치할 접속 프로그램이 없고, 인증서·CA·서명 키·개인키를 만들거나 Git에 넣지 않았습니다.
+
+### 확인 순서
+
+1. 저장소 루트에서 판정기 연습을 실행합니다.
+   ```bash
+   npm run decider:test
+   ```
+2. 출력에 아래 두 줄이 모두 보여야 하고, 마지막 줄 안내와 함께 종료 코드가 0이어야 합니다.
+   ```text
+   통과 · 등록 기기의 정상 요청
+   통과 · 미등록 기기의 가상 요청
+   이 명령은 가상 요청으로 연습하며 심판 통과 증거가 아닙니다.
+   ```
+   「확인 필요」가 한 줄이라도 보이면 그 요청의 응답을 확인합니다.
+3. 두 줄의 "통과"는 위 응답이 각각 아래와 같다는 뜻입니다(같은 가상 요청으로 `decide`를 직접 불러 확인한 값).
+
+   | 가상 요청 | `deviceRegistered` | 결정 | 이유 코드 | 규칙 |
+   |---|---|---|---|---|
+   | 등록 기기의 정상 요청 | `true` | `allow` | `approved` | `device_registered` |
+   | 미등록 기기의 가상 요청 | `false` | `deny` | `device_not_registered` | `device_registered` |
+   | 기기 등록 값이 없는 요청 | 없음 | `deny` | `device_not_registered` | `device_registered` |
+
+4. 판정기 규칙 시험(값 형태·읽기 외 요청·이상한 입력·계약 이름만 읽는지)도 함께 실행합니다.
+   ```bash
+   node --test test/decider.test.mjs
+   ```
+
+### 확인 범위와 한계
+
+- `npm run decider:test`는 가상 요청으로 하는 **로컬 연습**이며 심판 통과의 증거가 아닙니다. 반 엔진이 실제 기기·인증서를 확인하는 경로는 이 저장소에서 시험하지 않았습니다.
+- 서울(미등록 기기 인증서), 의성(클라이언트 인증서 없는 mTLS 통로), 보성(등록 기기와 다른 사용자 토큰), 청양(등록되지 않은 가상 기기 사건) 같은 **미등록 기기 공격은 심판이 직접 시험합니다.** 이 저장소에서 그 공격을 재현했다고 주장하지 않습니다.
+- `npm run fixture:7`(정상 사건 `allow`, 복합 이상 사건 `step_up`)은 7단계 연습이라 6단계에서는 복합 이상 사건 부분이 통과하지 않는 것이 정상입니다.
+- 허용 이유 코드 `approved`는 문서의 예시를 따른 것이며 운영 등록부의 허용 코드 목록은 이 저장소에서 확인할 수 없습니다.
+
+### 설정과 100점 항목 확인
+
+- `aleph.config.json`의 `step`은 6입니다. 단계를 올릴 때 이 숫자도 함께 올리며, `src/attack-check.mjs`에도 6단계 점검(5단계 점검 + 판정기 기기 등록 규칙의 가상 요청 호출 3개)을 더했습니다.
+- `허용 경로(allowedRoutes)`와 `originalApiUrl`, 로그인·메모 API는 바뀌지 않았습니다.
+
+| 항목 | 확인 방법과 결과 |
+|---|---|
+| 저장소를 새로 받아 `npm install`이 오류 없이 끝남 | 커밋할 파일만 새 폴더에 풀고(`node_modules` 없음) `npm install`을 실행했고 오류 없이 끝났습니다(패키지 10개). 같은 폴더에서 `npm run decider:test`도 통과했습니다. |
+| 판정기가 계약의 요청 이름만 읽고 모든 가상 요청에 형식이 맞는 응답을 돌려줌 | `test/decider.test.mjs`가 소스에서 읽는 요청 이름(`requestId`, `deviceRegistered`, `method`)이 `docs/DECIDER_REQUEST.md`의 이름인지, `role`·`identity`·`device`·`geo`를 읽지 않는지, 응답이 5개 이름이고 `ruleIds`가 모두 `RULE_IDS`에 있는지 확인합니다. |
+| `aleph.config.json`의 `step`이 6 이상 | `step: 6` |
