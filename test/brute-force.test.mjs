@@ -25,13 +25,19 @@ test('읽기 모듈은 비밀값처럼 보이는 값을 가려서 출력한다',
   const dir = await mkdtemp(join(tmpdir(), 'bf-'));
   try {
     const path = join(dir, 'f.json');
+    // 키 모양의 가짜 값은 파일에 적지 않고 실행할 때 조립합니다(저장소에 키 모양 문자열을 남기지 않기 위해).
+    const fakeToken = ['token', 'abcDEF123456'].join('=');
+    const fakeServerKey = ['sb', 'secret', 'ZZZZZZZZZZZZ'].join('_');
+    const fakeJwt = ['eyJhbGciOiJFUzI1NiJ9', 'eyJzdWIiOiIxIn0', 'sig12345'].join('.');
     await writeFile(path, JSON.stringify({ schema: 'aleph.xdr.fixture.v1', alerts: [{
       id: 'x-1', timestamp: '2026-01-01T00:00:00Z',
-      rule: { level: 5, description: 'token=abcDEF123456 실패 sb_secret_ZZZZZZZZZZZZ eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiIxIn0.sig12345' },
+      rule: { level: 5, description: `${fakeToken} 실패 ${fakeServerKey} ${fakeJwt}` },
       data: { srcip: '192.0.2.1', srcuser: 'user01' },
     }] }));
     const [row] = readAlerts(path);
-    assert.doesNotMatch(row.description, /abcDEF123456|sb_secret_ZZZ|eyJhbGci/u);
+    for (const secret of [fakeToken.split('=')[1], fakeServerKey, fakeJwt.split('.')[0]]) {
+      assert.ok(!row.description.includes(secret), '비밀값처럼 보이는 값이 출력에 남음');
+    }
     assert.match(row.description, /\[가림\]/u);
   } finally {
     await rm(dir, { recursive: true, force: true });

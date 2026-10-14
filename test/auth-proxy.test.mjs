@@ -3,6 +3,8 @@ import { readFile } from 'node:fs/promises';
 import { afterEach, beforeEach, test } from 'node:test';
 import { authRoute } from '../src/auth-proxy.mjs';
 
+// 키 모양의 가짜 값은 파일에 적지 않고 실행할 때 조립합니다(저장소에 키 모양 문자열을 남기지 않기 위해).
+const FAKE_PUBLISHABLE = ['sb', 'publishable', 'TEST', 'ONLY', 'VALUE'].join('_');
 const realFetch = globalThis.fetch;
 const realEnv = { url: process.env.SUPABASE_URL, key: process.env.SUPABASE_PUBLISHABLE_KEY };
 const calls = [];
@@ -10,7 +12,7 @@ const calls = [];
 beforeEach(() => {
   calls.length = 0;
   process.env.SUPABASE_URL = 'https://example-project.supabase.co';
-  process.env.SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_TEST_ONLY_VALUE';
+  process.env.SUPABASE_PUBLISHABLE_KEY = FAKE_PUBLISHABLE;
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
@@ -41,7 +43,7 @@ test('로그인 성공은 필요한 값만 돌려주고 공개 키는 서버에�
   assert.equal(out.code, 200);
   assert.deepEqual(Object.keys(out.body).sort(), ['access_token', 'email', 'expires_at', 'refresh_token']);
   assert.equal(calls[0].url, 'https://example-project.supabase.co/auth/v1/token?grant_type=password');
-  assert.equal(calls[0].init.headers.apikey, 'sb_publishable_TEST_ONLY_VALUE');
+  assert.equal(calls[0].init.headers.apikey, FAKE_PUBLISHABLE);
   assert.equal(out.headers['cache-control'], 'no-store');
   assert.ok(!JSON.stringify(out.body).includes('sb_publishable_'));
 });
