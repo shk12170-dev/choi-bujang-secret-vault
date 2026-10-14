@@ -70,6 +70,8 @@ export function readDetectionEvents(input) {
 const WINDOW_MS = 10 * 60 * 1000;
 const BURST_OVER = 120;
 const UNUSUAL_NETWORK = 'unusual';
+// 10단계 정책 사본(src/policy-restore.mjs)이 비교하는 탐지 기준값입니다. 값을 바꾸면 사본과의 차이로 드러납니다.
+export const DETECTION_POLICY = Object.freeze({ rule: 'burst_read', windowMs: WINDOW_MS, burstOver: BURST_OVER, unusualNetwork: UNUSUAL_NETWORK });
 
 function suspiciousSubjects(events) {
   const bySubject = new Map();

@@ -10,6 +10,9 @@
     "decider:test": "node scripts/decider-test.mjs",
     "detect:test": "node scripts/detect-test.mjs",
     "fixture:7": "node scripts/fixture-7.mjs",
+    "policy:diff": "node scripts/policy-diff.mjs",
+    "policy:snapshot": "node scripts/policy-snapshot.mjs",
+    "policy:restore": "node scripts/policy-restore.mjs",
     "xdr:run": "node scripts/xdr-run.mjs",
     "xdr:test": "node --test test/brute-force.test.mjs test/web-injection.test.mjs test/xdr-run.test.mjs",
     "xdr:replay": "node scripts/xdr-replay.mjs"

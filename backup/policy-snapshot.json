@@ -1,0 +1,54 @@
+{
+  "schema": "aleph.policy-snapshot.v1",
+  "version": "step9-verified",
+  "createdAt": "2026-10-14T09:44:45Z",
+  "commit": "6d47e15959533864eb752a5a7eb583aabd90a541",
+  "policy": {
+    "step": 9,
+    "ruleIds": [
+      "device_registered",
+      "starter.deny",
+      "step_up_required",
+      "zone_access"
+    ],
+    "allowedRoutes": [
+      "GET /api/notes/:id",
+      "GET /api/notices",
+      "GET /api/notices/:id"
+    ],
+    "resourceKinds": {
+      "student.memo": {
+        "zone": "student",
+        "owner": "self",
+        "base": [
+          "api",
+          "notes"
+        ]
+      },
+      "instructor.notice": {
+        "zone": "instructor",
+        "owner": "instructor",
+        "base": [
+          "api",
+          "notices"
+        ]
+      },
+      "instructor.notice.admin": {
+        "zone": "instructor",
+        "owner": "instructor",
+        "base": [
+          "api",
+          "admin",
+          "notices"
+        ]
+      }
+    },
+    "detection": {
+      "rule": "burst_read",
+      "windowMs": 600000,
+      "burstOver": 120,
+      "unusualNetwork": "unusual"
+    }
+  },
+  "digest": "dcef69f02a72ef9accba6cf5d0f39f3e68f05e88c6af92c256391821ff5e29ea"
+}

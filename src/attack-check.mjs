@@ -9,6 +9,7 @@ export async function runAttackChecks(config) {
   if (config.step === 7) return runStep7Checks(config);
   if (config.step === 8) return runStep8Checks(config);
   if (config.step === 9) return runStep9Checks(config);
+  if (config.step >= 10) return runStep10Checks(config);
   if (config.step !== 1) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   let app;
   try {
@@ -420,5 +421,51 @@ async function runStep9Checks(config) {
       observed: `로컬 가상 사건 복합 130건: ${shape(complex)} / 연습 계약 모양 121건: ${shape(practiceShape)} / 정상 기기가 섞인 사건: ${shape(mixed)}${mixed.deviceId === deviceA ? '(의심 기기만 지목)' : '(기기 지목 확인 필요)'}` },
     { attackId: 'detect_normal_events_kept', expected: '정상 사건(평소 네트워크의 다량 조회·적은 조회·정확히 120건·지역만 다름·기기를 정할 수 없음)은 회수 제안 없이 observe',
       observed: `로컬 가상 사건 ${normal.map(([name, result]) => `${name} ${shape(result)}`).join(' / ')}` },
+  ];
+}
+
+// 10단계: 9단계 점검을 이어받되 상한(20개) 안에서 겹치는 2개를 줄이고, 복구 점검 2개를 더합니다.
+//   정책 사본 점검은 이 저장소의 src/policy-restore.mjs를 부르는 로컬 시험이며, 메모 복원 경로 점검은 배포된 주소로 보낸
+//   비로그인 요청 한 번입니다. 로그인한 계정의 실제 복원과 복구 뒤 1~9단계 재실행은 여기서 하지 않았고 미실행입니다.
+async function runStep10Checks(config) {
+  const previous = await runStep9Checks(config);
+  const { previewRestore, createSnapshot } = await import('./policy-restore.mjs');
+  const { readCurrentPolicy, readSnapshotFile } = await import('../scripts/policy-snapshot-lib.mjs');
+  const dropped = new Set([
+    'home_nosniff_header', // 첫 화면 헤더는 1단계 이후 바뀐 적 없고 aleph_json 점검이 같은 배포를 읽음
+    'anonymous_note_read_by_id', // anonymous_list_read·forged_token_list_read가 같은 로그인 거부를 확인
+  ]);
+  const kept = previous.filter(item => !dropped.has(item.attackId));
+
+  const current = await readCurrentPolicy();
+  const snapshot = await readSnapshotFile();
+  const shown = previewRestore(snapshot, current);
+  const tampered = snapshot && typeof snapshot === 'object'
+    ? previewRestore({ ...snapshot, policy: { ...snapshot.policy, ruleIds: [...(snapshot.policy?.ruleIds ?? []), 'x.allow_all'] } }, current)
+    : null;
+  const missing = previewRestore(null, current);
+  const policyObserved = shown.ok
+    ? `로컬 정책 사본 ${shown.version}(커밋 ${shown.commit.slice(0, 12)}): 변경 범위 ${shown.unchanged ? '없음' : `${shown.changes.length}곳`}, applied=${shown.applied} / 변조된 사본 ${tampered?.ok ? '통과됨(문제)' : `중단(${tampered?.reason})`} / 사본 없음 ${missing.ok ? '통과됨(문제)' : `중단(${missing.reason})`}`
+    : `로컬 정책 사본을 검증하지 못함(${shown.reason})`;
+
+  const app = config.publicAppUrl;
+  let route = '미실행(publicAppUrl 없음)';
+  if (typeof app === 'string' && app.startsWith('https://')) {
+    const response = await fetch(new URL('/api/notes/restore', app), {
+      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: randomUUID() }),
+    });
+    let hasMessage = false;
+    try { hasMessage = typeof (await response.clone().json())?.error === 'string'; } catch { /* JSON이 아니면 문구 없음 */ }
+    const type = response.headers.get('content-type') ?? '';
+    const denied = (response.status === 401 || response.status === 403) && type.includes('application/json') && hasMessage;
+    route = `비로그인 POST /api/notes/restore HTTP ${response.status}, ${type.includes('application/json') ? 'JSON' : 'JSON 아님'}, 오류 문구 ${hasMessage ? '있음' : '없음'} (${denied ? '거부됨' : '거부되지 않음'})`;
+  }
+  return [
+    ...kept,
+    { attackId: 'policy_snapshot_diff_preview', expected: '검증한 정책 사본이 있으면 복원할 버전과 변경 범위가 실행 전에 보이고, 사본이 없거나 변조되면 중단함',
+      observed: policyObserved },
+    { attackId: 'anonymous_note_restore', expected: '로그인 없는 메모 복원 요청이 401 또는 403과 JSON 오류 문구로 거부됨',
+      observed: route },
   ];
 }
