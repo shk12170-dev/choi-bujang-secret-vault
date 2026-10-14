@@ -453,7 +453,7 @@ async function runStep10Checks(config) {
   if (typeof app === 'string' && app.startsWith('https://')) {
     const response = await fetch(new URL('/api/notes/restore', app), {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: randomUUID() }),
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: crypto.randomUUID() }),
     });
     let hasMessage = false;
     try { hasMessage = typeof (await response.clone().json())?.error === 'string'; } catch { /* JSON이 아니면 문구 없음 */ }
