@@ -6,6 +6,7 @@ export async function runAttackChecks(config) {
   if (config.step === 4) return runStep4Checks(config);
   if (config.step === 5) return runStep5Checks(config);
   if (config.step === 6) return runStep6Checks(config);
+  if (config.step === 7) return runStep7Checks(config);
   if (config.step !== 1) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   let app;
   try {
@@ -270,5 +271,33 @@ async function runStep6Checks(config) {
       observed: `로컬 가상 요청 deviceRegistered=false: ${await describe({ ...normal, requestId: randomUUID(), deviceRegistered: false })}` },
     { attackId: 'decider_device_value_missing', expected: '기기 등록 값이 없는 요청이 deny와 이유 코드 device_not_registered',
       observed: `로컬 가상 요청 deviceRegistered 없음: ${await describe(withoutDevice)}` },
+  ];
+}
+
+// 7단계: 6단계 점검에 더해, 판정기의 추가 확인 규칙을 가상 사건으로 직접 호출해 점검합니다(점검 상한 20개 안에서 2개).
+// 이 부분도 배포 주소가 아니라 이 저장소의 src/decider.mjs를 부르는 로컬 연습이며 심판 판정이 아닙니다.
+// 엔진이 새 로그인 시각을 검증해 실제 자료를 막는 경로는 이 저장소에서 시험하지 않아 미실행입니다.
+async function runStep7Checks(config) {
+  const previous = await runStep6Checks(config);
+  const { randomUUID } = await import('node:crypto');
+  const { fixtureRequests } = await import('../scripts/fixture-7.mjs');
+  const { decide, RULE_IDS } = await import('./decider.mjs');
+  const { normal, suspicious } = fixtureRequests();
+
+  const describe = async request => {
+    const out = await decide(request);
+    const shapeOk = out && typeof out === 'object' && out.schema === 'aleph.decision.v1' && out.requestId === request.requestId
+      && Object.keys(out).sort().join(',') === 'decision,reasonCode,requestId,ruleIds,schema'
+      && Array.isArray(out.ruleIds) && out.ruleIds.length > 0 && out.ruleIds.every(id => RULE_IDS.includes(id));
+    return `decision=${out?.decision} reasonCode=${out?.reasonCode} (응답 형식 ${shapeOk ? '맞음' : '틀림'})`;
+  };
+  const fresh = patch => ({ ...suspicious, requestId: randomUUID(), ...patch });
+
+  return [
+    ...previous,
+    { attackId: 'decider_step_up_complex_event', expected: '평소와 다른 시각·처음 보는 네트워크·읽기 급증이 겹친 가상 사건은 step_up, 다시 확인한 뒤에는 allow',
+      observed: `복합 사건: ${await describe(fresh({}))} / 다시 확인(stepUp 검증됨): ${await describe(fresh({ stepUp: { verified: true, authAgeSeconds: 60 } }))}` },
+    { attackId: 'decider_forged_or_region_only_not_blocked', expected: '지역만 다른 사건과 출처가 위조된 사건은 추가 확인·거부로 승격되지 않고 allow',
+      observed: `지역만 다름: ${await describe(fresh({ signals: { source: 'judge_fixture', region: 'foreign', network: 'usual', hour: 14 }, recentEvents: [] }))} / 위조 출처(client_header): ${await describe(fresh({ signals: { source: 'client_header', region: 'foreign', network: 'unusual', hour: 3 } }))} / 정상 사건: ${await describe({ ...normal, requestId: randomUUID() })}` },
   ];
 }

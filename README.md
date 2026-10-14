@@ -365,3 +365,61 @@ node xdr/web-injection/respond.mjs # 거부 후보·알림 로그 생성
 | 저장소를 새로 받아 `npm install`이 오류 없이 끝남 | 커밋할 파일만 새 폴더에 풀고(`node_modules` 없음) `npm install`을 실행했고 오류 없이 끝났습니다(패키지 10개). 같은 폴더에서 `npm run decider:test`도 통과했습니다. |
 | 판정기가 계약의 요청 이름만 읽고 모든 가상 요청에 형식이 맞는 응답을 돌려줌 | `test/decider.test.mjs`가 소스에서 읽는 요청 이름(`requestId`, `deviceRegistered`, `method`)이 `docs/DECIDER_REQUEST.md`의 이름인지, `role`·`identity`·`device`·`geo`를 읽지 않는지, 응답이 5개 이름이고 `ruleIds`가 모두 `RULE_IDS`에 있는지 확인합니다. |
 | `aleph.config.json`의 `step`이 6 이상 | `step: 6` |
+
+## 7단계: 평소와 다른 접속은 다시 확인함
+
+판정기(`src/decider.mjs`)에 심판이 보낸 가상 접속 사건을 읽는 규칙을 더했습니다. 6단계의 기기 규칙 `device_registered`는 그대로 앞에 있습니다. `RULE_IDS`는 `starter.deny`, `device_registered`, `step_up_required`입니다.
+
+### 입력 검사: 접속 정보의 출처 구분 (`readAccessSignals`)
+
+접속 정보는 엔진이 만든 `signals`, `recentEvents`, `stepUp`에서만 읽습니다. 계약에 없는 이름(클라이언트 헤더, 위치 값 등)은 읽지 않고 개수만 기록하며, 값이 없거나 출처가 불명확하면 임의의 정상값으로 채우지 않습니다.
+
+| 출처 | 조건 | 쓰임 |
+|---|---|---|
+| `fixture` | `signals.source`가 정확히 `judge_fixture` | 심판의 가상 사건. 규칙 시험에는 쓰지만 실제 위치 증거가 아님 |
+| `none` | `signals.source`가 정확히 `none` | 실제 경로. 근거 없음이며 같이 온 값도 쓰지 않음 |
+| `untrusted` | 그 밖의 모든 경우 | 어떤 값도 판단에 쓰지 않음 |
+
+지역·네트워크는 소문자 단어, 시각은 0~23 정수일 때만 값으로 받고 아니면 `null`(사용 불가)입니다. `recentEvents`는 최대 12건이고 항목 형태가 맞을 때만 읽습니다. `stepUp`은 `verified: true`이고 나이가 0~900초일 때만 검증됨으로 읽습니다.
+
+### 규칙 `step_up_required`
+
+등록 기기의 읽기(GET)에서 아래 세 가지가 **모두** 겹칠 때만 `step_up`(이유 코드 `step_up_required`)을 돌려줍니다. 기준값은 학습용이며 보편 기준이 아닙니다.
+
+| 요소 | 기준 |
+|---|---|
+| 평소와 다른 시각 | 7~21시 밖 |
+| 처음 보는 네트워크 | 엔진이 `network: "unusual"`로 표시 |
+| 갑작스러운 읽기 급증 | `recentEvents`의 `risk_signal`이 10분 안에 합계 10건 이상 |
+
+- 지역 하나만으로는 추가 확인도 거부도 만들지 않습니다. 지역은 `region_foreign` 참고 표시로만 남고, 이 규칙은 어떤 조합에서도 `deny`를 만들지 않습니다.
+- 요소가 하나나 둘뿐이면 걸리지 않고, 출처가 불명확하거나 값이 빠진 사건도 근거로 쓰지 않아 기기 규칙의 `allow`를 따릅니다.
+- 엔진이 다시 확인했다고 넘긴 요청(`stepUp.verified: true`, 0~900초)은 `allow`합니다. 기기 규칙이 먼저여서 미등록 기기는 복합 사건이어도 `device_not_registered`로 거부됩니다.
+- 사유는 `describeStepUp(request)`가 요소별(`unusual_hour`, `unusual_network`, `read_burst`)로 남깁니다. 응답은 5개 이름만 담을 수 있어 이유 코드는 `step_up_required` 하나입니다. 주소·값 원문은 담지 않습니다.
+
+### 재로그인 계약 확인 결과
+
+| 확인 항목 | 결과 |
+|---|---|
+| 요청 쪽: 다시 확인했다는 표시 | **있음**. `stepUp: {verified, authAgeSeconds}`(`docs/DECIDER_REQUEST.md`). `verified`가 `true`일 때 나이는 0~900초 |
+| 응답 쪽: 추가 확인 요청 | **있음**. `decision: 'step_up'`은 엔진에 추가 본인 확인을 요청하는 결정 |
+| 엔진이 같은 내 로그인으로 **다시 로그인한 시각을 검증**하는 방법·값·경로 | **문서에 없음**. 이 저장소와 공식 시작 틀 최신(`2cd777b`) 어디에도 설명이 없음 |
+| 이 자료실이 엔진 뒤에서 `step_up`을 집행하는지 | **아님**. 배포 설정에 엔진 연결이 없음 |
+| 판정기가 토큰을 읽거나 기록하는지 | **아님**. 토큰·헤더·쿠키를 읽지 않고 응답·사유에도 되돌리지 않음(시험으로 확인) |
+
+따라서 **가상 사건 규칙만 시험했고, 실제 자료 차단과 재로그인 뒤 재판정은 미실행입니다.** `step_up` 결정이 실제로 자료 응답을 막는지는 엔진이 결정을 집행하는 환경에서만 알 수 있어서, 이 저장소의 시험을 실제 차단 증거로 보고하지 않습니다.
+
+### 확인 순서
+
+1. 가상 사건 연습: `npm run fixture:7` → `정상 사건: allow`, `복합 이상 사건: step_up`
+2. 판정기 연습: `npm run decider:test` → 네 항목 모두 `통과`(등록 정상, 미등록, 복합 이상, 다시 확인한 복합 이상)
+3. 규칙 시험: `node --test test/step-up.test.mjs test/access-signals.test.mjs`
+4. (미실행, 계약이 준비된 환경에서만) 복합 사건 요청에 대한 자료 응답이 없고 `step_up` 결정만 돌아오는지, 엔진이 새 로그인 시각을 검증해 `stepUp.verified`를 채운 뒤 같은 요청이 `allow`되는지를 실측합니다. 그 결과를 이 문서에 적기 전에는 완료라고 쓰지 않습니다.
+
+### 100점 항목 확인
+
+| 항목 | 확인 방법 |
+|---|---|
+| 저장소를 새로 받아 `npm install` 성공 | 커밋할 파일만 새 폴더에 풀고(`node_modules` 없음) `npm install`을 실행해 오류 없이 끝났습니다(패키지 10개). 같은 폴더에서 `npm run decider:test`(네 항목 통과)와 `npm run fixture:7`(정상 `allow`, 복합 `step_up`)도 확인했습니다. |
+| 판정기가 계약 이름만 읽고 응답 형식이 맞음 | `test/decider.test.mjs`가 읽는 이름(`requestId`, `deviceRegistered`, `method`, `signals`, `recentEvents`, `stepUp`)이 계약에 있는지, 응답 5개 이름·`ruleIds`가 `RULE_IDS` 안인지 확인 |
+| `aleph.config.json`의 `step`이 7 이상 | `step: 7`. `src/attack-check.mjs`에 7단계 점검(6단계 점검 18개 + 판정기 가상 사건 2개, 제출 묶음 점검 상한 20개)을 더했습니다. |
