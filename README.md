@@ -629,3 +629,71 @@ npm run decider:test      # 판정기 응답 형식 그대로
 | 저장소를 새로 받아 `npm install` 성공 | 커밋할 파일만 새 폴더에 풀어 `npm install`을 실행(아래 보고 참고) |
 | `src/decider.mjs`가 계약 이름만 읽고 응답 형식이 맞음 | 이번 단계에서 판정기를 바꾸지 않았고 `decider:test`·`fixture:7`·판정기 시험 통과 |
 | `aleph.config.json`의 `step`이 10 이상 | `step: 10` |
+
+## 11단계: 나만의 접속 앱과 기기 승인
+
+내 자료실을 설치형 웹앱 화면으로 다듬고, 서버가 이 기기를 등록 기기로 확인한 뒤에만 자료를 열어 줍니다. 따로 접속 프로그램을 만들거나 설치하지 않았고, 서비스 워커·캐시도 쓰지 않습니다.
+
+### 앱 설정과 화면 (제작 1)
+
+| 파일 | 내용 |
+|---|---|
+| `public/manifest.webmanifest` | 앱 이름 `BYTE BACK 내 자료실`, 짧은 이름, 시작 주소 `/`, `display: standalone`, 아이콘 |
+| `public/icon.svg` | 벡터 아이콘 |
+| `vercel.json` | manifest의 `Content-Type: application/manifest+json` 헤더(기존 `nosniff` 유지) |
+| `public/index.html` | 「이 기기의 승인 상태」 패널, 설치 표시(참고용), 오프라인 안내 |
+
+설치 표시(설치된 앱 화면으로 열었는지)는 참고용이며 기기 승인과 별개입니다. 설치했다는 표시만으로 기기 확인이 끝났다고 보지 않습니다.
+
+### 기기 승인 흐름 (제작 2)
+
+| 서비스 | 경로 | 하는 일 |
+|---|---|---|
+| `device` | `GET /api/device/status` | 로그인한 학생의 이 기기 상태: `unrequested`·`pending`·`approved`·`denied` (심판 시험 신원은 `not_applicable`) |
+| `device` | `POST /api/device/request` | 이 기기의 승인을 요청(대기 기록만 만듦). 본문은 읽지 않음, 사용자당 대기 5건 제한 |
+
+1. 로그인하면 화면이 서버에 승인 상태를 묻고, 승인 전에는 자료를 부르지 않으며 편집창도 숨깁니다.
+2. 「이 기기 승인 요청」 버튼은 요청만 보냅니다. 승인(`approved`)·거부(`denied`)는 앱의 어떤 경로로도 바뀌지 않고 운영자가 DB에서 직접 바꿉니다(`supabase/device_approvals.sql`).
+3. 서버는 학생 로그인의 모든 보호 자료 요청(`/api/notes*`·`/api/notices*`·`/api/admin/*`·`/api/notes/restore`)마다 (사용자, 기기) 쌍이 승인됐는지 다시 확인하고 아니면 `403 DEVICE_NOT_APPROVED`로 막습니다. 확인하지 못하면(`DB 오류`) 열어 주지 않습니다(`503`).
+4. 기기 식별은 서버가 만든 무작위 핸들을 HttpOnly·Secure·SameSite=Strict 쿠키(`Path=/api`)로 맡깁니다. 화면 스크립트는 읽지 못하며 `localStorage`·`sessionStorage`·`indexedDB`에는 기기 키도 토큰도 넣지 않습니다. DB에는 핸들의 SHA-256만 저장합니다.
+
+운영자가 승인하는 방법: SQL Editor에서 `supabase/device_approvals.sql`의 "운영자가 직접 하는 일"을 따라 요청 목록을 보고 한 건을 `approved`로 바꿉니다.
+
+### 직접 확인할 것
+
+| 확인 | 결과 | 근거 |
+|---|---|---|
+| 승인 전에는 자료가 없는가? | **예(가상 DB 시험)** | `test/device-approval.test.mjs`: 요청 전·대기·거부·확인 실패·다른 사용자·쿠키 없음은 관문에서 차단. 화면은 승인 전에 자료를 부르지 않음. 운영 환경 확인은 아래 「확인 범위」 참고 |
+| 승인된 기기의 기존 화면은 정상인가? | **예(가상 DB 시험)** | 승인된 (사용자, 기기)는 통과하고 기존 보호 요청 시험 154개는 그대로 통과 |
+
+### 확인 순서
+
+```bash
+node --test test/device-approval.test.mjs test/pwa-shell.test.mjs   # 기기 승인·앱 설정
+node --test test/api-zones.test.mjs test/owner-check.test.mjs       # 기존 보호 요청의 정상·거부
+npm run bundle                                                      # 배포된 주소의 비로그인 요청 점검
+```
+
+### 확인 범위와 미검증
+
+- 승인 흐름은 가상 DB 시험으로만 확인했습니다. 운영에서는 `device_approvals.sql` 적용, 요청, 운영자 승인, 자료 열림을 아직 직접 확인하지 않았습니다(실행 기록 참고).
+- 심판 시험 신원(`judge` 토큰)은 관문 대상이 아닙니다. 심판이 학생 로그인 토큰으로 자료를 부르면 승인 전에는 `403`일 수 있으며, 심판이 기기를 어떻게 가리키는지는 이 저장소에서 확인할 수 없습니다.
+- 쿠키는 기기 하드웨어의 증명이 아닙니다. 쿠키가 통째로 복사되면 그 기기로 보일 수 있습니다. 승인은 (사용자, 기기) 쌍에 묶여 다른 사용자 계정으로는 쓸 수 없습니다.
+- 판정기(`src/decider.mjs`)는 이번 단계에서 바꾸지 않았고 엔진이 주는 `deviceRegistered`를 그대로 읽습니다. 앱의 기기 승인과 판정기의 기기 등록 값은 서로 연동되지 않았습니다.
+
+### 실행 기록 (꾸미지 않음)
+
+| 항목 | 상태 | 비고 |
+|---|---|---|
+| 로컬 시험 묶음 | **실행함** | 이 커밋 기준 전체 통과(아래 100점 항목 참고) |
+| 운영 `device_approvals.sql` 적용 | **미실행** | 학생이 SQL Editor에서 직접 실행해야 합니다 |
+| 운영 승인 요청 → 운영자 승인 → 자료 열림 | **미실행** | 위 SQL 적용 뒤 학생이 직접 확인합니다 |
+| 배포된 비로그인 점검(`npm run bundle`) | 아래 제출 전 확인에서 실행 | 결과는 제출 묶음의 `attackAttempts` |
+
+### 100점 항목 확인 (11단계)
+
+| 항목 | 확인 방법과 결과 |
+|---|---|
+| 저장소를 새로 받아 `npm install` 성공 | 커밋한 파일만 새 폴더에 풀어 설치한 결과를 제출 전 확인 보고에 적습니다 |
+| `src/decider.mjs`가 계약 이름만 읽고 응답 형식이 맞음 | 이번 단계에서 판정기를 바꾸지 않았고 `decider:test`·`fixture:7`이 통과 |
+| `aleph.config.json`의 `step`이 11 이상 | `step: 11` |

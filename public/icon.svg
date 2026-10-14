@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="내 자료실">
+  <rect width="512" height="512" rx="96" fill="#101a28"/>
+  <rect x="116" y="150" width="280" height="212" rx="28" fill="#1a2a3d" stroke="#8ad8df" stroke-width="16"/>
+  <circle cx="256" cy="256" r="38" fill="#8ad8df"/>
+  <rect x="244" y="270" width="24" height="52" rx="8" fill="#8ad8df"/>
+</svg>

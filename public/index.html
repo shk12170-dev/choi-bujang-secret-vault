@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>BYTE BACK | 점령된 자료실</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#101a28">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; }
     body { margin: 0; min-height: 100vh; background: #101a28; color: #ecf4ff; }
@@ -28,6 +31,11 @@
     .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
     .status { margin: 0 0 12px; font-size: 16px; }
     .error { margin: 10px 0 0; color: #ffb3c0; font-size: 15px; }
+    .device dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; font-size: 15px; }
+    .device dt { color: #8ad8df; }
+    .device dd { margin: 0; color: #ecf4ff; }
+    .device p { font-size: 14px; margin: 12px 0 0; }
+    .offline { margin: 0 0 18px; padding: 12px 16px; border: 1px solid #e0c36a; border-radius: 12px; color: #fff3c9; background: #5a4a1a55; font-size: 15px; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -36,6 +44,20 @@
     <div class="eyebrow">BYTE BACK · 4단계 내 자료만 보임</div>
     <h1>점령된 자료실</h1>
     <p>아래 기록은 모두 실습을 위해 만든 가상 자료입니다. 실제 개인정보나 비밀번호는 적지 마세요.</p>
+    <div class="offline" id="offline-notice" role="status" hidden>지금 인터넷에 연결되어 있지 않습니다. 이 앱은 오프라인에서 메모를 저장해 두지 않으므로 연결이 돌아올 때까지 자료를 볼 수 없고, 연결 전에 쓴 내용은 저장되지 않았을 수 있습니다.</div>
+    <section class="panel device" aria-label="기기 승인 상태">
+      <h2>이 기기의 승인 상태</h2>
+      <dl>
+        <dt>기기 승인</dt><dd id="device-approval">확인 전</dd>
+        <dt>설치 표시</dt><dd id="install-mode">확인하는 중입니다.</dd>
+      </dl>
+      <p id="device-note">기기 승인은 서버와 판정기가 정합니다. 앱으로 설치했거나 설치 화면으로 열었다는 표시만으로는 이 기기가 확인되었다고 볼 수 없습니다.</p>
+      <div class="row">
+        <button type="button" id="device-request" hidden>이 기기 승인 요청</button>
+        <button type="button" id="device-refresh" class="secondary" hidden>상태 다시 확인</button>
+      </div>
+      <p class="error" id="device-error" role="alert" hidden></p>
+    </section>
     <div class="notice">로그인한 사람만 자기 메모를 볼 수 있습니다. 서버가 요청한 사람과 메모 주인을 매번 비교해서, 다른 사람의 메모는 목록에 나오지 않고 주소를 알아도 읽거나 고치거나 지울 수 없습니다.</div>
     <section class="panel" aria-label="로그인">
       <h2 id="auth-title">로그인</h2>
@@ -97,6 +119,8 @@
     const noteError = $('note-error');
     let session = null;
     let editingId = null;
+    // 기기 승인 상태는 서버가 알려 준 값만 담습니다: null(확인 전) · unrequested · pending · approved · denied · error
+    let deviceState = null;
 
     const reasons = {
       invalid_credentials: '이메일 또는 비밀번호가 맞지 않습니다.',
@@ -123,11 +147,44 @@
       list.replaceChildren(item);
     };
 
+    const APPROVAL_LABELS = {
+      unrequested: '요청 전 — 이 기기는 아직 승인되지 않았습니다',
+      pending: '승인 대기 중 — 운영자가 확인하기 전에는 자료를 볼 수 없습니다',
+      approved: '승인됨 — 서버가 이 기기를 등록 기기로 확인했습니다',
+      denied: '승인되지 않음 — 이 기기로는 자료를 볼 수 없습니다',
+      error: '확인하지 못함 — 잠시 뒤에 다시 확인해 주세요',
+    };
+    function renderDevice() {
+      const known = deviceState && APPROVAL_LABELS[deviceState];
+      $('device-approval').textContent = session
+        ? (known ? APPROVAL_LABELS[deviceState] : '확인하는 중입니다')
+        : '확인 전 — 로그인하면 서버에 확인합니다';
+      $('device-request').hidden = !(session && deviceState === 'unrequested');
+      $('device-refresh').hidden = !(session && ['pending', 'denied', 'error'].includes(deviceState));
+    }
+    const showDeviceError = text => { $('device-error').textContent = text ?? ''; $('device-error').hidden = !text; };
+
+    // 서버에 이 기기의 승인 상태를 묻습니다. 응답이 없거나 알 수 없는 값이면 승인으로 보지 않습니다.
+    async function refreshDevice() {
+      showDeviceError(null);
+      deviceState = null;
+      renderDevice();
+      if (!session) { renderAuth(); return; }
+      try {
+        const data = await api('/api/device/status');
+        deviceState = ['unrequested', 'pending', 'approved', 'denied'].includes(data?.status) ? data.status : 'error';
+      } catch {
+        deviceState = 'error';
+      }
+      renderDevice();
+      renderAuth();
+    }
+
     function renderAuth() {
       const signedIn = Boolean(session);
       loginForm.hidden = signedIn;
       logout.hidden = !signedIn;
-      editor.hidden = !signedIn;
+      editor.hidden = !(signedIn && deviceState === 'approved');
       $('auth-title').textContent = signedIn ? '로그인됨' : '로그인';
       status.textContent = signedIn
         ? `${session.email ?? '알 수 없는 계정'} 계정으로 로그인한 상태입니다.`
@@ -221,6 +278,7 @@
 
     async function loadNotes() {
       if (!session) return showMessage('로그인하면 자료가 보입니다.');
+      if (deviceState !== 'approved') return showMessage('이 기기가 승인되기 전에는 자료를 표시하지 않습니다.');
       try {
         const notes = await api('/api/notes');
         if (!Array.isArray(notes)) throw new Error('자료 형식이 맞지 않습니다.');
@@ -240,6 +298,7 @@
       session = result.data;
       writeSession(session);
       renderAuth();
+      await refreshDevice();
       loadNotes();
     });
     logout.addEventListener('click', async () => {
@@ -248,6 +307,8 @@
       session = null;
       writeSession(null);
       resetEditor();
+      deviceState = null;
+      renderDevice();
       renderAuth();
       loadNotes();
       if (token) await authCall('logout', {}, token);
@@ -267,9 +328,43 @@
     });
     $('note-cancel').addEventListener('click', () => { resetEditor(); showNoteError(null); });
 
+    $('device-request').addEventListener('click', async () => {
+      showDeviceError(null);
+      try {
+        const response = await fetch('/api/device/request', {
+          method: 'POST', cache: 'no-store',
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        if (!response.ok) throw new Error(String(response.status));
+      } catch (error) {
+        showDeviceError('승인 요청을 보내지 못했습니다. 잠시 뒤에 다시 해 주세요.');
+        return;
+      }
+      await refreshDevice();
+    });
+    $('device-refresh').addEventListener('click', async () => { await refreshDevice(); loadNotes(); });
+
     session = readSession();
+    renderDevice();
     renderAuth();
-    loadNotes();
+    refreshDevice().then(loadNotes);
+  </script>
+  <script>
+    // 11단계: 설치형 웹앱 표시와 기기 승인 상태 표시. 서비스 워커·기기 키·토큰은 쓰지 않고 저장소에도 아무것도 쓰지 않습니다.
+    // 기기 승인 상태는 위 모듈 스크립트가 서버 응답(/api/device/status)으로만 표시합니다. 이 스크립트는 승인 표시를 건드리지 않습니다.
+    (function () {
+      // 설치 표시는 참고용이며 기기 승인 상태에 영향을 주지 않습니다.
+      var standalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+      document.getElementById('install-mode').textContent = standalone
+        ? '설치된 앱 화면으로 열림(참고용, 기기 승인과 별개)'
+        : '브라우저 탭으로 열림(참고용, 기기 승인과 별개)';
+
+      var notice = document.getElementById('offline-notice');
+      function renderConnection() { notice.hidden = navigator.onLine !== false; }
+      window.addEventListener('online', renderConnection);
+      window.addEventListener('offline', renderConnection);
+      renderConnection();
+    })();
   </script>
 </body>
 </html>

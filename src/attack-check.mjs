@@ -9,6 +9,7 @@ export async function runAttackChecks(config) {
   if (config.step === 7) return runStep7Checks(config);
   if (config.step === 8) return runStep8Checks(config);
   if (config.step === 9) return runStep9Checks(config);
+  if (config.step >= 11) return runStep11Checks(config);
   if (config.step >= 10) return runStep10Checks(config);
   if (config.step !== 1) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   let app;
@@ -467,5 +468,81 @@ async function runStep10Checks(config) {
       observed: policyObserved },
     { attackId: 'anonymous_note_restore', expected: '로그인 없는 메모 복원 요청이 401 또는 403과 JSON 오류 문구로 거부됨',
       observed: route },
+  ];
+}
+
+// 11단계: 10단계 점검을 이어받되 상한(20개) 안에서 겹치는 3개를 줄이고, 기기 승인 점검 3개를 더합니다.
+//   기기 관문 점검은 이 저장소의 src/device-approval.mjs를 가상 DB로 부르는 로컬 시험입니다.
+//   배포 점검은 비로그인 요청과 공개 manifest 한 번씩입니다. 로그인한 계정의 실제 승인 흐름(요청→운영자 승인→자료 열림)은
+//   여기서 하지 않았고 미실행입니다.
+async function runStep11Checks(config) {
+  const previous = await runStep10Checks(config);
+  const { deviceGate, hashHandle, newHandle, DEVICE_COOKIE } = await import('./device-approval.mjs');
+  const dropped = new Set([
+    'anonymous_admin_notice_write', // anonymous_notice_write_by_id가 같은 비로그인 쓰기 거부를 확인
+    'decider_zone_memo_item_read', // decider_device_rules가 같은 등록 기기의 메모 읽기 allow를 확인
+    'policy_snapshot_diff_preview', // 10단계에서 확인했고 11단계에서 정책을 바꾸지 않음
+  ]);
+  const kept = previous.filter(item => !dropped.has(item.attackId));
+
+  // 가상 DB: 승인 기록 한 줄(사용자 A, 기기 핸들 하나)만 둡니다.
+  const owner = crypto.randomUUID();
+  const other = crypto.randomUUID();
+  const handle = newHandle();
+  const cookie = `${DEVICE_COOKIE}=${handle}`;
+  const rows = [{ owner_id: owner, device_hash: hashHandle(handle), status: 'pending' }];
+  const db = { from: () => {
+    const filters = [];
+    const api = {
+      select() { return api; },
+      eq(key, value) { filters.push([key, value]); return api; },
+      maybeSingle: async () => ({ data: rows.find(row => filters.every(([key, value]) => row[key] === value)) ?? null, error: null }),
+    };
+    return api;
+  } };
+  const student = userId => ({ kind: 'student', userId });
+  const describe = async (login, header) => {
+    const gate = await deviceGate(db, login, header);
+    return `${gate.status}=${gate.allowed ? '통과' : '차단'}`;
+  };
+  const beforeApproval = await describe(student(owner), cookie);
+  const noCookie = await describe(student(owner), undefined);
+  rows[0].status = 'denied';
+  const denied = await describe(student(owner), cookie);
+  rows[0].status = 'approved'; // 운영자가 DB에서 바꾼 것을 흉내 냅니다
+  const approved = await describe(student(owner), cookie);
+  const otherUser = await describe(student(other), cookie);
+  const judgeIdentity = await describe({ kind: 'judge', userId: crypto.randomUUID(), runId: crypto.randomUUID(), identity: 'a' }, undefined);
+
+  const app = config.publicAppUrl;
+  const probe = async (method, path) => {
+    const response = await fetch(new URL(path, app), {
+      method, redirect: 'error', signal: AbortSignal.timeout(10000),
+      headers: { 'Content-Type': 'application/json' }, ...(method === 'GET' ? {} : { body: '{}' }),
+    });
+    let hasMessage = false;
+    try { hasMessage = typeof (await response.clone().json())?.error === 'string'; } catch { /* JSON이 아님 */ }
+    const type = response.headers.get('content-type') ?? '';
+    const denied401 = (response.status === 401 || response.status === 403) && type.includes('application/json') && hasMessage;
+    return `HTTP ${response.status}, ${type.includes('application/json') ? 'JSON' : 'JSON 아님'}, 오류 문구 ${hasMessage ? '있음' : '없음'} (${denied401 ? '거부됨' : '거부되지 않음'})`;
+  };
+  let deviceProbe = '미실행(publicAppUrl 없음)';
+  let manifestProbe = '미실행(publicAppUrl 없음)';
+  if (typeof app === 'string' && app.startsWith('https://')) {
+    deviceProbe = `비로그인 GET /api/device/status ${await probe('GET', '/api/device/status')} / 비로그인 POST /api/device/request ${await probe('POST', '/api/device/request')}`;
+    const response = await fetch(new URL('/manifest.webmanifest', app), { redirect: 'error', signal: AbortSignal.timeout(10000) });
+    let manifest = null;
+    try { manifest = await response.json(); } catch { /* JSON이 아님 */ }
+    const page = await (await fetch(app, { redirect: 'error', signal: AbortSignal.timeout(10000) })).text();
+    manifestProbe = `HTTP ${response.status}, 이름 ${typeof manifest?.name === 'string' ? '있음' : '없음'}, display=${manifest?.display ?? '없음'}, 첫 화면 manifest 연결 ${page.includes('rel="manifest"') ? '있음' : '없음'}, 기기 승인 표시 ${page.includes('id="device-approval"') ? '있음' : '없음'}`;
+  }
+  return [
+    ...kept,
+    { attackId: 'device_gate_local', expected: '승인 전·거부·쿠키 없음·다른 사용자는 자료 관문에서 차단되고 승인된 (사용자, 기기)만 통과하며 심판 시험 신원은 대상이 아님',
+      observed: `로컬 가상 DB 대기 ${beforeApproval} / 쿠키 없음 ${noCookie} / 거부 ${denied} / 승인 ${approved} / 다른 사용자 ${otherUser} / 심판 신원 ${judgeIdentity}` },
+    { attackId: 'anonymous_device_endpoints', expected: '로그인 없는 기기 승인 상태·요청이 401 또는 403과 JSON 오류 문구로 거부됨',
+      observed: deviceProbe },
+    { attackId: 'public_manifest_and_status_panel', expected: '공개 manifest에 앱 이름·display가 있고 첫 화면이 이를 연결하며 기기 승인 표시를 가짐',
+      observed: manifestProbe },
   ];
 }
