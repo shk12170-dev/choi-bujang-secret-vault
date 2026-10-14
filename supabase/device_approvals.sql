@@ -1,11 +1,11 @@
 -- 11단계 제작 2: 기기 승인 기록. 서버 함수(service_role)만 읽고 씁니다.
 -- Supabase 대시보드 > SQL Editor에 붙여 넣고 Run 하세요. 여러 번 실행해도 안전합니다.
--- 실제 기기 이름·개인정보는 넣지 마세요. 기기는 서버가 만든 무작위 핸들의 해시로만 구별합니다.
+-- 실제 기기 이름·개인정보는 넣지 마세요. 기기는 서버가 요청 머리글에서 계산한 해시로만 구별합니다(브라우저에 아무것도 맡기지 않음).
 
 create table if not exists public.device_approvals (
   id uuid primary key default gen_random_uuid(),
   owner_id uuid not null,                       -- 승인을 요청한 로그인 사용자(서버가 검증한 값)
-  device_hash text not null check (device_hash ~ '^[0-9a-f]{64}$'),  -- 기기 핸들의 SHA-256
+  device_hash text not null check (device_hash ~ '^[0-9a-f]{64}$'),  -- 요청 머리글에서 서버가 계산한 기기 표시 값의 SHA-256
   status text not null default 'pending' check (status in ('pending', 'approved', 'denied')),
   requested_at timestamptz not null default now(),
   decided_at timestamptz,

@@ -86,17 +86,10 @@
   </main>
   <script type="module">
     // 5단계: 화면은 Supabase 주소나 키를 갖지 않고 우리 서버 함수(/api/auth/*, /api/notes*)만 부릅니다.
-    // 로그인 세션은 이 탭의 sessionStorage에만 두고, 비밀번호는 저장하지 않습니다.
-    const SESSION_KEY = 'byteback.session';
-    const readSession = () => {
-      try { return JSON.parse(sessionStorage.getItem(SESSION_KEY)); } catch { return null; }
-    };
-    const writeSession = value => {
-      try {
-        if (value) sessionStorage.setItem(SESSION_KEY, JSON.stringify(value));
-        else sessionStorage.removeItem(SESSION_KEY);
-      } catch { /* 저장소를 쓸 수 없으면 새로고침 때 로그아웃됩니다 */ }
-    };
+    // 11단계: 로그인 토큰은 이 화면의 메모리에만 두고 브라우저가 맡아 두는 어떤 저장 공간에도 쓰지 않습니다.
+    // 그래서 새로고침하면 다시 로그인해야 합니다. 비밀번호는 저장하지 않습니다.
+    const readSession = () => null;
+    const writeSession = () => {};
     async function authCall(action, body, token) {
       const response = await fetch(`/api/auth/${action}`, {
         method: 'POST', cache: 'no-store',

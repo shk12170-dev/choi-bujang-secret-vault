@@ -46,7 +46,7 @@ export async function requireLogin(request, response, allowedMethods, { deviceGa
     auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
   });
   if (gateDevice) {
-    const gate = await deviceGate(database, login, request.headers?.cookie);
+    const gate = await deviceGate(database, login, request.headers);
     if (gate.status === 'error') {
       response.status(503).json({ error: 'DEVICE_CHECK_UNAVAILABLE' });
       return null;

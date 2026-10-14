@@ -39,9 +39,8 @@ test('화면은 manifest를 연결하고 오프라인 안내를 갖되 서비스
   assert.match(html, /id="offline-notice"/u);
   assert.match(html, /오프라인에서 메모를 저장해 두지 않으므로/u);
   assert.doesNotMatch(html, /serviceWorker|caches\.|CacheStorage|indexedDB|localStorage/u);
-  // 기존 세션 저장 방식(탭의 sessionStorage, 비밀번호 저장 없음)은 그대로다.
-  assert.match(html, /sessionStorage\.setItem\(SESSION_KEY/u);
-  assert.doesNotMatch(html, /sessionStorage\.setItem\([^)]*password/iu);
+  // 로그인 토큰은 화면 메모리에만 두고 어떤 브라우저 저장소에도 쓰지 않는다.
+  assert.doesNotMatch(html, /sessionStorage|localStorage|document\.cookie|byteback\.session/u);
   // 11단계 코드가 새 저장 공간을 쓰지 않는다.
   const shell = html.slice(html.lastIndexOf('<script>'));
   assert.doesNotMatch(shell, /Storage|document\.cookie|fetch\(/u);
