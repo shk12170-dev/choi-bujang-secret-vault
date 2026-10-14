@@ -82,6 +82,13 @@
       </form>
       <p class="error" id="note-error" role="alert" hidden></p>
     </section>
+    <section class="panel" id="ops" aria-label="탈환 작전실" hidden>
+      <h2>탈환 작전실</h2>
+      <p class="status" id="ops-status" role="status">요약을 불러오는 중입니다.</p>
+      <div id="ops-body"></div>
+      <p class="error" id="ops-error" role="alert" hidden></p>
+      <p id="ops-note">이 표는 서버가 요청을 받은 순간 실제로 실행하거나 읽은 결과입니다. 실행하지 않은 것은 「미실행」으로 표시하며, 화면의 문구를 통과 근거로 쓰지 않습니다. 메모 본문은 표시하지 않습니다.</p>
+    </section>
     <ul id="notes" aria-live="polite"><li>자료를 불러오는 중입니다.</li></ul>
   </main>
   <script type="module">
@@ -171,6 +178,54 @@
       }
       renderDevice();
       renderAuth();
+    }
+
+    const SOURCE_LABELS = { live_api: '서버 실행 결과', unavailable: '읽지 못함', not_run: '미실행' };
+    // 작전실 요약: 서버가 돌려준 값만 표로 그립니다. 값이 없으면 빈 칸이 아니라 「읽지 못함」·「미실행」으로 표시합니다.
+    function opsRow(table, cells) {
+      const row = document.createElement('tr');
+      for (const text of cells) {
+        const cell = document.createElement('td');
+        cell.textContent = String(text);
+        row.append(cell);
+      }
+      table.append(row);
+    }
+    function renderOps(data) {
+      const body = $('ops-body');
+      const table = document.createElement('table');
+      table.style.cssText = 'width:100%;border-collapse:collapse;font-size:14px';
+      const probe = (group, label) => {
+        for (const item of data[group].probes) {
+          opsRow(table, [label, item.id, `기대 ${item.expected}`, `실제 ${item.actual ?? '없음'}`, item.matches ? '일치' : '불일치', SOURCE_LABELS[data[group].source]]);
+        }
+      };
+      probe('decider', '판정기');
+      probe('detection', '탐지');
+      const dev = data.revocation.devices;
+      opsRow(table, ['회수', '기기 승인 기록', `승인 ${dev.approved} · 대기 ${dev.pending} · 거부 ${dev.denied}`, dev.ids.join(', ') || '없음', '', SOURCE_LABELS[dev.source]]);
+      opsRow(table, ['회수', '실제 회수와 시간', data.revocation.note, '', '', SOURCE_LABELS[data.revocation.source]]);
+      const snap = data.recovery.snapshot;
+      opsRow(table, ['복구', '정책 사본', snap.verified ? `${snap.version} · 커밋 ${snap.commit} · digest ${snap.digest}` : `검증 실패(${snap.reason})`, snap.verified ? (snap.unchanged ? '현재 정책과 같음' : `차이 ${snap.changes}곳`) : '', '', SOURCE_LABELS[snap.source]]);
+      opsRow(table, ['복구', '메모 사본', `${data.recovery.backups.count}건`, data.recovery.backups.ids.join(', ') || '없음', '', SOURCE_LABELS[data.recovery.backups.source]]);
+      opsRow(table, ['복구', '복원 감사 기록', `${data.recovery.restoreAudit.count}건`, data.recovery.restoreAudit.lastRestoreAt ?? '복원 기록 없음', '', SOURCE_LABELS[data.recovery.restoreAudit.source]]);
+      for (const item of data.notRun) opsRow(table, ['시험', item.id, item.note, '', '', '미실행']);
+      body.replaceChildren(table);
+      $('ops-status').textContent = `규칙: ${data.decider.ruleIds.join(', ')} · 단계 ${data.step} · 커밋 ${data.commit ?? '알 수 없음'} · 확인 시각 ${data.generatedAt}`;
+    }
+    async function loadOps() {
+      const panel = $('ops');
+      panel.hidden = !(session && deviceState === 'approved');
+      if (panel.hidden) return;
+      $('ops-error').hidden = true;
+      try {
+        renderOps(await api('/api/ops'));
+      } catch (error) {
+        $('ops-body').replaceChildren();
+        $('ops-status').textContent = '요약을 불러오지 못했습니다. 아래 오류를 확인하세요.';
+        $('ops-error').textContent = error.message;
+        $('ops-error').hidden = false;
+      }
     }
 
     function renderAuth() {
@@ -293,6 +348,7 @@
       renderAuth();
       await refreshDevice();
       loadNotes();
+      loadOps();
     });
     logout.addEventListener('click', async () => {
       showError(null);
@@ -304,6 +360,7 @@
       renderDevice();
       renderAuth();
       loadNotes();
+      loadOps();
       if (token) await authCall('logout', {}, token);
     });
     noteForm.addEventListener('submit', async event => {
@@ -335,12 +392,12 @@
       }
       await refreshDevice();
     });
-    $('device-refresh').addEventListener('click', async () => { await refreshDevice(); loadNotes(); });
+    $('device-refresh').addEventListener('click', async () => { await refreshDevice(); loadNotes(); loadOps(); });
 
     session = readSession();
     renderDevice();
     renderAuth();
-    refreshDevice().then(loadNotes);
+    refreshDevice().then(() => { loadNotes(); loadOps(); });
   </script>
   <script>
     // 11단계: 설치형 웹앱 표시와 기기 승인 상태 표시. 서비스 워커는 쓰지 않고 브라우저에 아무것도 남기지 않습니다.

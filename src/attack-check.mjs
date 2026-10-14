@@ -9,6 +9,7 @@ export async function runAttackChecks(config) {
   if (config.step === 7) return runStep7Checks(config);
   if (config.step === 8) return runStep8Checks(config);
   if (config.step === 9) return runStep9Checks(config);
+  if (config.step >= 12) return runStep12Checks(config);
   if (config.step >= 11) return runStep11Checks(config);
   if (config.step >= 10) return runStep10Checks(config);
   if (config.step !== 1) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
@@ -544,5 +545,52 @@ async function runStep11Checks(config) {
       observed: deviceProbe },
     { attackId: 'public_manifest_and_status_panel', expected: '공개 manifest에 앱 이름·display가 있고 첫 화면이 이를 연결하며 기기 승인 표시를 가짐',
       observed: manifestProbe },
+  ];
+}
+
+// 12단계: 11단계 점검을 이어받되 상한(20개) 안에서 겹치는 2개를 줄이고, 탈환 작전실 점검 2개를 더합니다.
+//   작전실 요약 점검은 이 저장소의 src/ops-summary.mjs를 가상 DB로 실행하는 로컬 시험이며, 배포 점검은 비로그인 요청 한 번입니다.
+//   로그인한 계정의 실제 작전실 화면과 1~11단계 전체 재실행(npm run ops:verify)은 여기서 하지 않았고 미실행입니다.
+//   심판의 41종 공격 시험은 이 저장소가 실행하지 않았습니다.
+async function runStep12Checks(config) {
+  const previous = await runStep11Checks(config);
+  const { buildOpsSummary } = await import('./ops-summary.mjs');
+  const dropped = new Set([
+    'aleph_json_allowed_routes', // aleph_json_original_api_url이 같은 /aleph.json을 읽어 확인
+    'public_manifest_and_status_panel', // 11단계에서 확인했고 12단계에서 바뀌지 않음
+  ]);
+  const kept = previous.filter(item => !dropped.has(item.attackId));
+
+  const owner = crypto.randomUUID();
+  const db = { from: () => {
+    const api = {
+      select() { return api; },
+      eq() { return api; },
+      then: resolve => resolve({ data: [], error: null }),
+    };
+    return api;
+  } };
+  const summary = await buildOpsSummary({ login: { kind: 'student', userId: owner }, db });
+  const probes = [...summary.decider.probes, ...summary.detection.probes];
+  const matched = probes.filter(probe => probe.matches).length;
+  const body = JSON.stringify(summary);
+  const localObserved = `로컬 가상 DB 요약: 판정기·탐지 ${matched}/${probes.length} 일치, 회수 ${summary.revocation.source}, 41종 시험 ${summary.notRun.some(item => item.id === 'attack_41') ? '미실행 표시' : '표시 없음(문제)'}, 메모 본문·전체 식별자 ${/"title"|"body"/u.test(body) ? '포함됨(문제)' : '없음'}`;
+
+  const app = config.publicAppUrl;
+  let deployed = '미실행(publicAppUrl 없음)';
+  if (typeof app === 'string' && app.startsWith('https://')) {
+    const response = await fetch(new URL('/api/ops', app), { redirect: 'error', signal: AbortSignal.timeout(10000) });
+    let hasMessage = false;
+    try { hasMessage = typeof (await response.clone().json())?.error === 'string'; } catch { /* JSON이 아님 */ }
+    const type = response.headers.get('content-type') ?? '';
+    const denied = (response.status === 401 || response.status === 403) && type.includes('application/json') && hasMessage;
+    deployed = `비로그인 GET /api/ops HTTP ${response.status}, ${type.includes('application/json') ? 'JSON' : 'JSON 아님'}, 오류 문구 ${hasMessage ? '있음' : '없음'} (${denied ? '거부됨' : '거부되지 않음'})`;
+  }
+  return [
+    ...kept,
+    { attackId: 'ops_summary_local', expected: '작전실 요약이 판정기·탐지를 실제로 실행한 결과를 담고 회수·41종 시험은 미실행으로 표시하며 메모 본문을 담지 않음',
+      observed: localObserved },
+    { attackId: 'anonymous_ops_summary', expected: '로그인 없는 작전실 요약 요청이 401 또는 403과 JSON 오류 문구로 거부됨',
+      observed: deployed },
   ];
 }

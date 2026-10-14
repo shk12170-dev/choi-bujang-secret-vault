@@ -697,3 +697,121 @@ npm run bundle                                                      # 배포된 
 | 저장소를 새로 받아 `npm install` 성공 | 커밋한 파일만 새 폴더에 풀어 설치한 결과를 제출 전 확인 보고에 적습니다 |
 | `src/decider.mjs`가 계약 이름만 읽고 응답 형식이 맞음 | 이번 단계에서 판정기를 바꾸지 않았고 `decider:test`·`fixture:7`이 통과 |
 | `aleph.config.json`의 `step`이 11 이상 | `step: 11` |
+
+
+## 12단계: 탈환 작전실
+
+판정기 규칙, 탐지 사건, 회수 상태, 복구 버전을 한 화면에서 읽는 「탈환 작전실」과, 1~12단계의 정상·금지 요청을 실제로 보내 결과표를 남기는 절차를 붙였습니다. **화면의 성공 문구를 통과 근거로 쓰지 않습니다.** 표시는 서버가 요청을 받은 순간 실행하거나 읽은 값이고, 실행하지 않은 것은 「미실행」, 읽지 못한 것은 「읽지 못함」으로 둡니다.
+
+### 탈환 작전실 화면 (제작 1)
+
+| 서비스 | 경로 | 하는 일 |
+|---|---|---|
+| `ops` | `GET /api/ops` | 로그인하고 기기 승인을 지난 학생에게 요약을 돌려줍니다. 비로그인은 401, 승인 전은 403 |
+
+요약에 담기는 것(메모 제목·본문은 담지 않고 식별자는 앞 8자리만):
+
+| 영역 | 내용 | 출처 표시 |
+|---|---|---|
+| 판정기 | 규칙 이름(`RULE_IDS`)과 가상 요청 5건(등록 기기 읽기 allow, 미등록 deny, 목록 deny, 쓰기 deny, 복합 이상 step_up)의 기대·실제 | 서버 실행 결과 |
+| 탐지 | 기준값과 가상 사건 3건(정상 observe, 평소 네트워크 observe, 복합 propose_revocation)의 기대·실제 | 서버 실행 결과 |
+| 회수 | 이 사용자의 기기 승인 기록(승인·대기·거부 개수, 앞 8자리 id). 실제 회수와 걸린 시간은 **미실행** | 서버 실행 결과 / 미실행 |
+| 복구 | 정책 사본 버전·커밋·digest·현재 정책과의 차이, 메모 사본 개수, 복원 감사 기록 개수와 마지막 시각 | 서버 실행 결과(표를 읽지 못하면 읽지 못함) |
+| 시험 | 심판의 41종 공격 시험 | **미실행** |
+
+화면의 수치와 서버 기록 대조: SQL Editor에서 아래를 실행해 화면의 개수와 같은지 봅니다(본인 `owner_id` 기준).
+
+```sql
+select
+  (select count(*) from public.device_approvals where status = 'approved') as approved,
+  (select count(*) from public.device_approvals where status = 'pending') as pending,
+  (select count(*) from public.device_approvals where status = 'denied') as denied,
+  (select count(*) from public.note_backups) as backups,
+  (select count(*) from public.note_restore_audit) as audit_rows;
+```
+
+### 정상·금지 요청 결과표 (제작 2)
+
+```bash
+npm run ops:verify
+```
+
+- 배포된 주소(`publicAppUrl`)에 1~12단계의 정상(허용)·금지(거부) 요청을 실제로 보내고, 단계·요청·기대·실제 상태·결과·요청 ID(보낸 `X-Request-Id`)·서버 요청 ID(`x-vercel-id`)·확인 시각을 `artifacts/ops-report.md`와 `.json`에 남깁니다(git에 올리지 않음).
+- 로그인이 필요한 요청은 시험 계정의 토큰을 환경변수로 넣었을 때만 보냅니다. 값은 출력하지 않습니다.
+
+| 환경변수 | 뜻 |
+|---|---|
+| `ALEPH_TOKEN_A` | 시험 계정 A의 로그인 토큰(승인된 기기에서 받은 값) |
+| `ALEPH_B_MEMO_ID` | 시험 계정 B의 메모 UUID(A가 접근을 시도할 대상) |
+| `ALEPH_USER_AGENT` | A가 기기 승인을 받은 브라우저의 User-Agent(기기 구분 값을 맞추기 위해) |
+
+- 값이 없으면 해당 요청은 보내지 않고 **미실행**으로 남기며 통과로 세지 않습니다.
+- 41종 공격 시험은 이 저장소에 목록이 없어 실행하지 않았고, 보고서도 41종 통과를 주장하지 않습니다.
+
+### 설치·실행·중지·복구 안내 (제작 3)
+
+기준: 제출 묶음(`artifacts/submission.json`)의 `commit`과 배포된 `/aleph.json`의 `commit`이 같은 커밋의 파일을 기준으로 합니다.
+
+**출처 구분**
+
+| 구분 | 내용 |
+|---|---|
+| **제공 엔진(학생 작업 아님)** | ALEPH SDP 엔진 사용: 신원·기기·경로 확인과 판정기 호출, 회수 실행, 심판 접수, 로그인 발급자 연동. 학생 코드는 이 엔진을 대체하거나 포장하지 않았고 엔진의 비밀값도 이 저장소에 없습니다. |
+| **학생 작업** | `src/decider.mjs`(판정기 규칙 4개), `src/detect.mjs`(탐지 규칙·회수 제안), `public/`(접속 앱: manifest·기기 승인 화면·작전실), `api/`·`src/`(자료실 API·기기 승인·복원), `supabase/*.sql`, `scripts/`·`test/` |
+
+**설치**
+
+```bash
+git clone https://github.com/shk12170-dev/choi-bujang-secret-vault.git
+cd choi-bujang-secret-vault
+npm install
+```
+
+배포(Vercel)에는 서버 환경변수 `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`와 (공지 수정용) `INSTRUCTOR_USER_IDS`가 필요합니다. **값은 이 저장소에 두지 않고** Vercel 환경변수 입력란에만 넣습니다.
+
+Supabase SQL Editor에서 차례로 실행: `supabase/class_notices.sql` → `supabase/note_backups.sql` → `supabase/device_approvals.sql`.
+
+**실행(로컬 확인)**
+
+```bash
+node --test $(ls test/*.test.mjs | grep -v package-starter)   # 전체 시험
+npm run decider:test && npm run fixture:7 && npm run detect:test   # 판정기·탐지 연습
+npm run policy:diff                                            # 정책 사본과 현재 정책 비교
+npm run ops:verify                                             # 배포 주소에 정상·금지 요청 재실행
+npm run bundle                                                 # 제출 묶음(깨끗한 git 상태 필요)
+```
+
+**중지**
+
+- 앱 전체를 멈추려면 Vercel 프로젝트에서 배포를 일시 중지하거나 이전 커밋 배포로 되돌립니다.
+- 한 기기만 막으려면 SQL Editor에서 `update public.device_approvals set status = 'denied', decided_at = now() where id = '<요청 id>'::uuid;`를 실행합니다.
+- 자료 접근을 모두 닫으려면 `device_approvals`의 승인된 행을 `denied`로 바꾸면 학생 로그인은 즉시 403이 됩니다.
+
+**복구**
+
+1. `npm run policy:diff`로 사본(`backup/policy-snapshot.json`)과 현재 정책의 차이를 먼저 봅니다.
+2. `npm run policy:restore -- --confirm <사본 digest>`로 설정 파일의 허용 경로를 되돌립니다. 코드 항목은 안내된 `git diff <커밋> -- <파일>`로 사람이 되돌립니다.
+3. 메모 한 건은 사본 소유자로 로그인해 `POST /api/notes/restore`에 `{ "id": "<메모 UUID>" }`를 보냅니다.
+4. 복구 뒤 `npm run ops:verify`로 금지 요청이 다시 거부되고 정상 요청이 허용되는지 결과표를 만듭니다.
+
+### 직접 확인할 것 (12단계)
+
+| 확인 | 결과 | 근거 |
+|---|---|---|
+| 실제 API 결과와 화면 표시가 일치하는가? | **로컬은 예, 운영은 아래 실행 기록 참고** | `test/ops-room.test.mjs`: 서버 기록 개수·가린 식별자가 요약에 그대로 담기고 화면은 서버 응답 필드만 표로 그림 |
+| 41종 시험의 실행·미실행을 구별했는가? | **예** | 요약·화면·보고서 모두 41종은 미실행으로 표시, 통과로 세지 않음. 실행한 요청 수와 미실행 수를 결과표에 따로 셈 |
+| 제공 엔진과 학생 작업의 출처를 밝혔는가? | **예** | 위 「출처 구분」 표 |
+
+### 확인 범위와 미검증
+
+- 작전실의 판정기·탐지 항목은 **가상 요청**을 서버가 실행한 결과입니다. 심판의 실제 요청 결과가 아닙니다.
+- 실제 회수와 회수 시간, 심판의 41종 공격 시험은 실행하지 않았습니다.
+- 로그인이 필요한 정상·금지 요청(`npm run ops:verify`의 A 계정 항목)은 토큰을 넣어 실행한 경우에만 결과가 있습니다. 아래 실행 기록을 확인하세요.
+
+### 100점 항목 확인 (12단계)
+
+| 항목 | 확인 방법과 결과 |
+|---|---|
+| 저장소를 새로 받아 `npm install` 성공 | 커밋한 파일만 새 폴더에 풀어 설치한 결과를 제출 전 확인에 적습니다 |
+| `src/decider.mjs`가 계약 이름만 읽고 응답 형식이 맞음 | 12단계에서 판정기를 바꾸지 않았고 `decider:test`·`fixture:7`이 통과 |
+| `aleph.config.json`의 `step`이 12 이상 | `step: 12` |
