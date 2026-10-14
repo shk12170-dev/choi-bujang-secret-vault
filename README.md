@@ -430,3 +430,77 @@ node xdr/web-injection/respond.mjs # 거부 후보·알림 로그 생성
 | 저장소를 새로 받아 `npm install` 성공 | 커밋할 파일만 새 폴더에 풀고(`node_modules` 없음) `npm install`을 실행해 오류 없이 끝났습니다(패키지 10개). 같은 폴더에서 `npm run decider:test`(네 항목 통과)와 `npm run fixture:7`(정상 `allow`, 복합 `step_up`)도 확인했습니다. |
 | 판정기가 계약 이름만 읽고 응답 형식이 맞음 | `test/decider.test.mjs`가 읽는 이름(`requestId`, `deviceRegistered`, `method`, `signals`, `recentEvents`, `stepUp`)이 계약에 있는지, 응답 5개 이름·`ruleIds`가 `RULE_IDS` 안인지 확인 |
 | `aleph.config.json`의 `step`이 7 이상 | `step: 7`. `src/attack-check.mjs`에 7단계 점검(6단계 점검 18개 + 판정기 가상 사건 2개, 제출 묶음 점검 상한 20개)을 더했습니다. |
+
+## 8단계: 자료마다 갈 수 있는 구역을 나눔
+
+자원을 구역으로 나누고, 판정기와 자료 API가 **각자** 구역과 권한을 확인합니다. 화면 메뉴 숨김이나 요청 본문의 `role`은 어떤 쪽에서도 근거로 쓰지 않습니다.
+
+### 자원 구분표 (`src/resources.mjs`)
+
+요청마다 서버가 구별할 수 있는 자원 ID를 붙입니다. API는 로그인 통과 뒤 이 ID를 `X-Resource-Id` 응답 머리글과 컨텍스트에 남깁니다.
+
+| 자원 | 자원 ID | 구역 | 권한 확인 방식 |
+|---|---|---|---|
+| 메모 | `student.memo.list` / `student.memo.item` | `student` | API가 검증된 사용자와 저장된 `owner_id`를 대조 |
+| 반 공지 | `instructor.notice.list` / `instructor.notice.item` | `instructor` | 읽기는 로그인한 사용자, 쓰기는 누구에게나 거부 |
+| 강사 관리 경로 | `instructor.notice.admin.list` / `.item` | `instructor` | 서버의 강사 허용 목록에 있는 검증된 학생 로그인만 추가(POST)·수정(PUT) |
+
+미등록 경로, `:id` 자리의 기능 이름(`export`, `all`, `admin` 등), 쿼리·인코딩·점 조각이 섞인 경로는 자원으로 인정하지 않습니다.
+
+### 판정기 구역 규칙 `zone_access`
+
+`RULE_IDS`는 `starter.deny`, `device_registered`, `step_up_required`, `zone_access`입니다. 규칙 순서는 기기 등록(6단계) → 구역(8단계) → 추가 확인(7단계)이고 앞 단계 규칙은 그대로 유지됩니다.
+
+| 구역 | 서비스 | 허용 | 거부 |
+|---|---|---|---|
+| 메모 | `notes` | ID 하나를 고르는 경로(`/api/notes/:id`, 연습 모양 `/notes/:id`)의 읽기(GET) | ID 없는 전체 목록(모든 메서드), 모든 쓰기 |
+| 반 공지 | `notices` | 읽기(GET) | 쓰기(POST·PUT·PATCH·DELETE)는 누구에게나 |
+| 강사 자료 | `instructor` | 없음 | 읽기 포함 전부 |
+
+- 알 수 없는 서비스·경로, `service`와 경로가 다른 요청, `route`와 `path`가 다른 요청, 쿼리가 있는 요청(`queryLength`가 0이 아님)은 거부합니다.
+- 메모 ID의 형식(UUID 여부)은 좁히지 않습니다. 대신 `export`·`all` 같은 기능 이름은 ID가 될 수 없습니다.
+- 판정기 요청에는 역할이 없어서 강사의 공지 수정은 판정기가 아니라 서버의 관리 경로가 처리합니다. 메모 주인 비교도 판정기가 아니라 API가 합니다.
+- 거부 이유 코드는 이미 쓰던 `starter_not_ready`를 유지하고, 어느 규칙이 거부했는지는 `ruleIds`(`zone_access`)로 구별합니다.
+- `aleph.config.json`의 `allowedRoutes`는 판정기가 허용하는 경로만 적습니다: `GET /api/notes/:id`, `GET /api/notices`, `GET /api/notices/:id`. 목록·쓰기·관리 경로는 판정기 허용 경로가 아니라서 적지 않았습니다(이전 단계에서 적었던 `/api/notes` 목록·쓰기 경로는 API가 계속 제공하며 판정기를 거치지 않는 앱 화면이 씁니다).
+
+### 자료 API의 재확인
+
+| 경로 | 확인 |
+|---|---|
+| `GET·PUT·DELETE /api/notes/:id`, `GET /api/notes` | 조회·수정·삭제는 요청이 아니라 **저장된 `owner_id`와 서버가 검증한 사용자**를 대조(4단계), 목록도 `owner_id` 조건. 거부는 없는 메모와 같은 404 |
+| `GET /api/notices`, `/api/notices/:id` | 로그인한 사용자만 읽기. 쓰기는 `403`(`notice_write_not_allowed_here`) |
+| `POST /api/admin/notices`, `PUT /api/admin/notices/:id` | 서버 환경변수 `INSTRUCTOR_USER_IDS`(강사 사용자 UUID 목록)에 있는 검증된 **학생** 로그인만. 목록이 비어 있으면 모두 거부, 심판 신원(`kind: judge`)은 강사가 아님 |
+
+- 요청 본문·머리글·쿼리의 `role`, `userId`, `owner_id`, `instructor` 값은 권한 근거로 읽지 않습니다(시험으로 확인).
+- 거부 사유는 서버 로그에 자원·동작·사유 코드만 짧게 남깁니다(사용자 ID·토큰·본문은 기록하지 않음). 예: `memo: deny resource=student.memo.item action=read reason=not_owner`.
+- 공지 테이블은 `supabase/class_notices.sql`(RLS 켬, `anon`·`authenticated` 권한 없음)이며 서버 함수만 접근합니다.
+
+### 직접 확인할 것
+
+| 확인 | 결과 | 근거 |
+|---|---|---|
+| 다른 구역 요청이 API에서 거부되는가? | **예** | `test/api-zones.test.mjs`: B의 A 메모 조회·수정·삭제는 404/403이고 A의 메모는 변경 전후 동일, B의 목록에 A의 자료 0건, 학생의 공지 수정은 `role` 위조·쿼리·머리글 포함 403이며 공지 변화 없음, 비로그인·위조 토큰은 공지·관리 경로 모두 401. 판정기는 `test/zones.test.mjs`(메모 목록·공지 쓰기·강사 자료·알 수 없는 경로·route/path 불일치·쿼리 우회 거부) |
+| 본인 정상 요청은 유지되는가? | **예** | A의 자기 목록·조회·수정, 본문의 `role`은 무시되고 소유자는 그대로. 판정기는 자기 메모 읽기 `allow`(`/api/notes/:id`, `/notes/demo` 연습 모양, UUID가 아닌 ID 포함). `npm run decider:test` 네 항목, `npm run fixture:7` 통과 |
+
+### 확인 순서
+
+```bash
+node --test test/zones.test.mjs test/api-zones.test.mjs test/resources.test.mjs   # 구역·API·자원 구분표
+npm run decider:test      # 네 항목 통과(등록·미등록·복합 이상·다시 확인)
+npm run fixture:7         # 정상 allow, 복합 이상 step_up
+```
+
+### 확인 범위와 미검증
+
+- **강사의 정상 수정은 가상 사용자 시험(`INSTRUCTOR_USER_IDS`에 가상 UUID를 넣은 로컬 시험)에서만 확인**했고, 운영 환경에는 강사 허용 목록과 공지 테이블이 아직 설정되지 않아 **실제 강사 접속은 미검증**입니다. 목록이 비어 있는 운영 환경에서는 공지를 아무도 수정할 수 없습니다.
+- 로그인한 학생의 공지 수정 거부는 가상 사용자 시험으로 확인했고, `npm run bundle`의 배포 점검은 로그인 정보가 없어 비로그인 요청까지만 확인합니다.
+- 엔진을 통한 자기 메모 수정은 판정기가 소유자 증거 없이 쓰기를 거부하므로 허용되지 않습니다. 앱 화면의 수정은 판정기를 거치지 않는 API 경로에서 동작하며, 엔진 경유 쓰기는 공식 소유권 계약이 생기기 전까지 미검증입니다.
+- 심판이 쓰는 `service`·`route` 표기가 위 가정(`notes`/`notices`/`instructor`, `/api` 접두어 유무)과 다르면 판정 결과가 다를 수 있습니다.
+
+### 100점 항목 확인
+
+| 항목 | 확인 방법과 결과 |
+|---|---|
+| 저장소를 새로 받아 `npm install` 성공 | 커밋할 파일만 새 폴더에 풀고(`node_modules` 없음) `npm install`을 실행해 오류 없이 끝났습니다(패키지 10개). 같은 폴더에서 `decider:test` 네 항목, `fixture:7`, 구역·API·판정기 시험 63개도 통과했습니다. |
+| 판정기가 계약 이름만 읽고 응답 형식이 맞음 | `test/decider.test.mjs`·`test/zones.test.mjs`가 읽는 이름(`requestId`, `deviceRegistered`, `method`, `service`, `route`, `path`, `queryLength`, `signals`, `recentEvents`, `stepUp`)이 계약에 있는지, 응답 5개 이름과 `ruleIds ⊂ RULE_IDS`를 확인. `role`·`identity`·`device`·`geo`는 읽지 않음 |
+| `aleph.config.json`의 `step`이 8 이상 | `step: 8`. `src/attack-check.mjs`에 8단계 점검(제출 묶음 점검 상한 20개 안에서 중복을 합치고 구역·공지 점검 6개 추가)을 더했습니다. |

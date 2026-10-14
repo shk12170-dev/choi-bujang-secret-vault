@@ -7,6 +7,7 @@ export async function runAttackChecks(config) {
   if (config.step === 5) return runStep5Checks(config);
   if (config.step === 6) return runStep6Checks(config);
   if (config.step === 7) return runStep7Checks(config);
+  if (config.step === 8) return runStep8Checks(config);
   if (config.step !== 1) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   let app;
   try {
@@ -299,5 +300,80 @@ async function runStep7Checks(config) {
       observed: `복합 사건: ${await describe(fresh({}))} / 다시 확인(stepUp 검증됨): ${await describe(fresh({ stepUp: { verified: true, authAgeSeconds: 60 } }))}` },
     { attackId: 'decider_forged_or_region_only_not_blocked', expected: '지역만 다른 사건과 출처가 위조된 사건은 추가 확인·거부로 승격되지 않고 allow',
       observed: `지역만 다름: ${await describe(fresh({ signals: { source: 'judge_fixture', region: 'foreign', network: 'usual', hour: 14 }, recentEvents: [] }))} / 위조 출처(client_header): ${await describe(fresh({ signals: { source: 'client_header', region: 'foreign', network: 'unusual', hour: 3 } }))} / 정상 사건: ${await describe({ ...normal, requestId: randomUUID() })}` },
+  ];
+}
+
+// 8단계: 7단계 점검을 이어받되 점검 상한(20개) 안에서 중복을 합치고, 구역 규칙(판정기 가상 요청)과
+// 공지 쓰기·강사 관리 경로의 비로그인 직접 요청(배포 주소)을 더합니다.
+// 판정기 부분은 이 저장소의 src/decider.mjs를 부르는 로컬 연습이며 심판 판정이 아닙니다.
+// 로그인한 학생의 공지 수정 거부와 허용 목록에 있는 강사의 정상 수정은 로그인 정보가 필요해 이 점검에 넣지 못했고
+// test/api-zones.test.mjs의 가상 사용자 시험으로만 확인했습니다(실제 접속은 미검증).
+async function runStep8Checks(config) {
+  const previous = await runStep7Checks(config);
+  const { randomUUID } = await import('node:crypto');
+  const { fixtureRequests } = await import('../scripts/fixture-7.mjs');
+  const { decide, RULE_IDS } = await import('./decider.mjs');
+  const app = deployedApp(config);
+  const { normal } = fixtureRequests();
+
+  // 이전 단계 점검 가운데 다른 점검이 같은 내용을 확인하는 것은 줄입니다(상한 20개).
+  const dropped = new Set([
+    'browser_has_no_server_key', // browser_has_no_supabase_key가 같은 화면 코드를 더 넓게 검사
+    'anonymous_note_update_by_id', 'anonymous_note_delete_by_id', // anonymous_note_read_by_id와 같은 경로·거부 방식
+    'decider_registered_device_read', 'decider_unregistered_device', 'decider_device_value_missing', // 아래 하나로 합침
+  ]);
+  const kept = previous.filter(item => !dropped.has(item.attackId));
+
+  const judge = request => decide(request).then(out => {
+    const shapeOk = out && out.schema === 'aleph.decision.v1' && out.requestId === request.requestId
+      && Object.keys(out).sort().join(',') === 'decision,reasonCode,requestId,ruleIds,schema'
+      && Array.isArray(out.ruleIds) && out.ruleIds.length > 0 && out.ruleIds.every(id => RULE_IDS.includes(id));
+    return `${out?.decision}${shapeOk ? '' : '(형식 틀림)'}`;
+  });
+  const req = (service, method, path, route, patch = {}) => ({
+    ...normal, requestId: randomUUID(), service, method, path, route, queryLength: 0, ...patch,
+  });
+  const id = randomUUID();
+  const memo = (method = 'GET') => req('notes', method, `/api/notes/${id}`, `${method} /api/notes/:id`);
+  const noticeItem = method => req('notices', method, `/api/notices/${id}`, `${method} /api/notices/:id`);
+
+  const httpProbe = async (method, path) => {
+    const response = await fetch(new URL(path, app), {
+      method, redirect: 'error', signal: AbortSignal.timeout(10000),
+      headers: { 'Content-Type': 'application/json', 'X-Role': 'instructor' },
+      ...(method === 'GET' ? {} : { body: JSON.stringify({ title: 'check', role: 'instructor' }) }),
+    });
+    let hasMessage = false;
+    let leaked = false;
+    try {
+      const data = await response.clone().json();
+      hasMessage = typeof data?.error === 'string';
+      leaked = typeof data?.title === 'string' || typeof data?.body === 'string' || Array.isArray(data);
+    } catch {
+      // JSON이 아닌 응답은 오류 문구가 없는 것으로 기록합니다.
+    }
+    const type = response.headers.get('content-type') ?? '';
+    const denied = (response.status === 401 || response.status === 403) && type.includes('application/json') && hasMessage && !leaked;
+    return `HTTP ${response.status}, ${type.includes('application/json') ? 'JSON' : 'JSON 아님'}, 오류 문구 ${hasMessage ? '있음' : '없음'}, 자료 ${leaked ? '노출됨' : '없음'} (${denied ? '거부됨' : '거부되지 않음'})`;
+  };
+
+  const writeMethods = ['POST', 'PUT', 'PATCH', 'DELETE'];
+  const noticeWrites = [];
+  for (const method of writeMethods) noticeWrites.push(`${method} ${await judge(noticeItem(method))}`);
+
+  return [
+    ...kept,
+    { attackId: 'decider_device_rules', expected: '등록 기기의 정상 읽기는 allow, 미등록 기기·기기 값 없음은 deny',
+      observed: `로컬 가상 요청 등록 ${await judge(memo())} / 미등록 ${await judge({ ...memo(), deviceRegistered: false })} / 값 없음 ${await judge((({ deviceRegistered: _r, ...rest }) => ({ ...rest, requestId: randomUUID() }))(memo()))}` },
+    { attackId: 'decider_zone_memo_item_read', expected: '자기 메모 한 건 읽기(ID 하나를 고르는 경로)는 allow, ID 형식은 좁히지 않음',
+      observed: `로컬 가상 요청 /api/notes/:id ${await judge(memo())} / 연습 요청 모양 ${await judge({ ...normal, requestId: randomUUID() })} / UUID가 아닌 ID ${await judge(req('notes', 'GET', '/api/notes/note-1', 'GET /api/notes/:id'))}` },
+    { attackId: 'decider_zone_memo_list_and_write', expected: 'ID 없는 메모 전체 목록과 메모 쓰기는 deny',
+      observed: `로컬 가상 요청 목록 ${await judge(req('notes', 'GET', '/api/notes', 'GET /api/notes'))} / 한 건 수정 ${await judge(memo('PUT'))} / 기능 이름이 :id 자리 ${await judge(req('notes', 'GET', '/api/notes/export', 'GET /api/notes/:id'))}` },
+    { attackId: 'decider_zone_notice_and_instructor', expected: '반 공지는 읽기만 allow, 쓰기는 누구에게나 deny, 강사 자료는 모두 deny',
+      observed: `로컬 가상 요청 공지 읽기 ${await judge(noticeItem('GET'))} / 공지 쓰기 ${noticeWrites.join(', ')} / 강사 자료 ${await judge(req('instructor', 'GET', '/api/instructor/materials', 'GET /api/instructor/materials'))}` },
+    { attackId: 'anonymous_notice_write_by_id', expected: '로그인 없는 공지 수정이 401 또는 403과 JSON 오류 문구로 거부됨(role 위조 포함)',
+      observed: `비로그인 PUT /api/notices/:id ${await httpProbe('PUT', `/api/notices/${id}`)}` },
+    { attackId: 'anonymous_admin_notice_write', expected: '로그인 없는 강사 관리 경로 수정이 401 또는 403과 JSON 오류 문구로 거부됨(role 위조 포함)',
+      observed: `비로그인 PUT /api/admin/notices/:id ${await httpProbe('PUT', `/api/admin/notices/${id}`)}` },
   ];
 }

@@ -2,6 +2,7 @@
 import { createClient } from '@supabase/supabase-js';
 import config from '../aleph.config.json' with { type: 'json' };
 import { createLoginVerifier } from './verify-login.mjs';
+import { resourceOfRequest } from './resources.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 export const isUuid = value => typeof value === 'string' && UUID.test(value);
@@ -42,7 +43,10 @@ export async function requireLogin(request, response, allowedMethods) {
   database ??= createClient(url, secretKey, {
     auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
   });
-  return { login, db: database };
+  // 8단계: 요청마다 서버가 구별한 자원 ID를 응답 머리글과 컨텍스트에 남깁니다(없는 경로면 null).
+  const resource = resourceOfRequest(request);
+  if (resource) response.setHeader('X-Resource-Id', resource.resourceId);
+  return { login, db: database, resource };
 }
 
 export function readJsonBody(request) {

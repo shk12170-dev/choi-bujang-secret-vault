@@ -29,7 +29,7 @@ test('등록 기기의 읽기 요청은 허용된다', async () => {
   const response = await decide(request);
   assertValid(request, response);
   assert.equal(response.decision, 'allow');
-  assert.deepEqual(response.ruleIds, ['device_registered']);
+  assert.deepEqual(response.ruleIds, ['zone_access']);
 });
 
 test('미등록이거나 값이 없거나 true가 아닌 형태이면 device_not_registered로 거부된다', async () => {
@@ -58,7 +58,7 @@ test('등록 기기여도 읽기가 아닌 요청은 기본 거부를 유지한�
     const response = await decide(request);
     assertValid(request, response);
     assert.equal(response.decision, 'deny');
-    assert.deepEqual(response.ruleIds, ['starter.deny']);
+    assert.deepEqual(response.ruleIds, ['zone_access']);
   }
 });
 

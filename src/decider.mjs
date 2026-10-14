@@ -5,11 +5,12 @@
 // 이 판정기는 docs/DECIDER_REQUEST.md 계약에 있는 이름만 읽습니다.
 // 지금까지 읽는 값: requestId(응답에 그대로 돌려줌), deviceRegistered, method,
 // 그리고 7단계의 접속 정보 signals, recentEvents, stepUp(출처 확인은 readAccessSignals가 맡음).
-export const RULE_IDS = Object.freeze(['starter.deny', 'device_registered', 'step_up_required']);
+export const RULE_IDS = Object.freeze(['starter.deny', 'device_registered', 'step_up_required', 'zone_access']);
 
 const RULE_STARTER_DENY = RULE_IDS[0];
 const RULE_DEVICE_REGISTERED = RULE_IDS[1];
 const RULE_STEP_UP_REQUIRED = RULE_IDS[2];
+const RULE_ZONE_ACCESS = RULE_IDS[3];
 
 // 7단계 규칙 step_up_required의 학습용 기준값입니다(보편 기준이 아님).
 // 세 가지가 모두 겹칠 때만 추가 확인을 보냅니다. 하나만으로는 보내지 않고, 이 규칙은 거부(deny)를 만들지 않습니다.
@@ -136,6 +137,64 @@ export function describeStepUp(request) {
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// 8단계 구역 규칙 zone_access: 자원을 서비스와 "정확한 경로 모양"으로 구역(메모·반 공지·강사 자료)으로 나눕니다.
+//   메모       service `notes`    자료 ID 하나를 고르는 경로(/notes/:id 또는 /api/notes/:id)의 읽기(GET)만 허용.
+//                                  ID 없는 전체 목록 경로와 모든 쓰기는 거부(주인 비교는 판정기가 아니라 API가 합니다).
+//   반 공지    service `notices`  읽기(GET)만 허용. 쓰기(POST·PUT·PATCH·DELETE)는 누구에게나 거부합니다.
+//                                  판정기 요청에는 역할이 없으므로 강사의 공지 수정은 서버의 관리 경로가 처리합니다.
+//   강사 자료  service `instructor` 판정기에서 모두 거부합니다.
+// 알 수 없는 서비스·경로, service와 경로가 다른 요청, route와 path가 다른 요청, 쿼리가 있는 요청은 거부합니다.
+// 메모 ID의 형식(UUID 여부)은 좁히지 않습니다. 대신 한 깊이 아래의 경로 한 조각이 ID 자리에 오며,
+// export·all 같은 기능 이름은 ID가 될 수 없습니다.
+// ---------------------------------------------------------------------------------------------
+const ZONE_BY_NAME = Object.freeze({ notes: 'memo', notices: 'notice', instructor: 'instructor' });
+const FUNCTION_WORDS = Object.freeze(new Set([
+  'export', 'import', 'all', 'admin', 'list', 'search', 'bulk', 'batch', 'backup', 'dump', 'download', 'upload',
+  'new', 'mine', 'my', 'me', 'self', 'public', 'private', 'stats', 'count', 'sync', 'manage', 'instructor', 'notices', 'notes',
+]));
+const MAX_PATH_LENGTH = 200;
+
+// 반환: { zone, shape, action, allowed, why }
+//   zone   'memo' | 'notice' | 'instructor' | null(알 수 없는 자원)
+//   shape  'list'(ID 없음) | 'item'(ID 하나) | null
+//   allowed  구역 규칙이 이 요청을 통과시키는지. 통과해도 기기·추가 확인 규칙은 그대로 적용됩니다.
+export function classifyZone(request) {
+  const deny = (why, zone = null, shape = null) => ({ zone, shape, action: null, allowed: false, why });
+  const path = request?.path;
+  const method = request?.method;
+  if (typeof path !== 'string' || typeof method !== 'string') return deny('path_or_method_missing');
+  // 경로가 모호하면(쿼리·해시·인코딩·역슬래시·점 조각·중복·끝 슬래시·비ASCII·너무 긴 경로) 자원을 정하지 않습니다.
+  if (path.length === 0 || path.length > MAX_PATH_LENGTH || path[0] !== '/' || /[?#\\%\u0000-\u001f\u007f-￿]/u.test(path)
+      || path.includes('//') || (path.length > 1 && path.endsWith('/'))) return deny('path_ambiguous');
+  const parts = path.slice(1).split('/');
+  if (parts.some(part => part === '' || part === '.' || part === '..')) return deny('path_ambiguous');
+  const prefix = parts[0] === 'api' ? '/api' : '';
+  const rest = prefix ? parts.slice(1) : parts;
+  const zone = Object.hasOwn(ZONE_BY_NAME, rest[0] ?? '') ? ZONE_BY_NAME[rest[0]] : null;
+  if (!zone) return deny('unknown_resource');
+  if (request?.service !== rest[0]) return deny('service_path_mismatch', zone);
+  let shape = null;
+  if (rest.length === 1) shape = 'list';
+  else if (rest.length === 2 && !FUNCTION_WORDS.has(rest[1].toLowerCase())) shape = 'item';
+  if (!shape) return deny('path_shape_unknown', zone);
+  // route는 "메서드 + 경로 모양"이며 path와 같은 모양이어야 합니다(:id 자리는 한 조각).
+  const expectedRoute = `${method} ${prefix}/${rest[0]}${shape === 'item' ? '/:id' : ''}`;
+  if (request?.route !== expectedRoute) return deny('route_path_mismatch', zone, shape);
+  // 쿼리로 기능을 고르지 않습니다. 엔진은 쿼리 원문 대신 길이만 넘기므로 길이가 0이 아니면 거부합니다.
+  if (request?.queryLength !== 0) return deny('query_not_allowed', zone, shape);
+
+  const action = { GET: 'read', POST: 'create', PUT: 'update', PATCH: 'update', DELETE: 'delete' }[method] ?? null;
+  if (!action) return deny('method_unknown', zone, shape);
+  if (zone === 'instructor') return { zone, shape, action, allowed: false, why: 'instructor_denied' };
+  if (zone === 'notice') {
+    return { zone, shape, action, allowed: action === 'read', why: action === 'read' ? 'notice_read' : 'notice_write_denied' };
+  }
+  // 메모: ID 하나를 고르는 읽기만. 전체 목록과 쓰기는 거부합니다.
+  if (shape === 'list') return { zone, shape, action, allowed: false, why: 'memo_list_denied' };
+  return { zone, shape, action, allowed: action === 'read', why: action === 'read' ? 'memo_item_read' : 'memo_write_denied' };
+}
+
 export async function decide(request) {
   const requestId = request?.requestId;
 
@@ -145,19 +204,20 @@ export async function decide(request) {
     return answer(requestId, 'deny', 'device_not_registered', RULE_DEVICE_REGISTERED);
   }
 
-  // 등록 기기의 자료 읽기(GET)만 다음으로 넘어갑니다. 엔진이 이미 서비스와 경로를 확인한 요청입니다.
-  if (request?.method === 'GET') {
-    // 7단계 규칙 step_up_required: 평소와 다른 시각 + 처음 보는 네트워크 + 갑작스러운 읽기 급증이 모두 겹치면
-    // 다시 확인(step_up)을 요청합니다. 지역만 다르거나 요소가 하나·둘뿐이면 이 규칙은 걸리지 않습니다.
-    // 엔진이 새 로그인 시각을 검증해 stepUp.verified를 true(0~900초)로 넘긴 요청은 허용합니다.
-    const access = describeStepUp(request);
-    if (access.matched) {
-      if (access.stepUp.verified) return answer(requestId, 'allow', 'approved', RULE_STEP_UP_REQUIRED);
-      return answer(requestId, 'step_up', 'step_up_required', RULE_STEP_UP_REQUIRED);
-    }
-    return answer(requestId, 'allow', 'approved', RULE_DEVICE_REGISTERED);
+  // 8단계 규칙 zone_access: 등록 기기라도 구역·경로·동작이 허용표에 맞아야 합니다. 맞지 않으면 기본 거부입니다.
+  // (이유 코드는 이미 쓰던 starter_not_ready를 유지하고, 어느 규칙이 거부했는지는 ruleIds로 구별합니다.)
+  if (!classifyZone(request).allowed) {
+    return answer(requestId, 'deny', 'starter_not_ready', RULE_ZONE_ACCESS);
   }
 
-  // 그 밖의 요청은 아직 허용하는 규칙이 없으므로 기본 거부를 유지합니다.
-  return answer(requestId, 'deny', 'starter_not_ready', RULE_STARTER_DENY);
+  // 구역 규칙을 통과한 읽기(GET)만 여기까지 옵니다.
+  // 7단계 규칙 step_up_required: 평소와 다른 시각 + 처음 보는 네트워크 + 갑작스러운 읽기 급증이 모두 겹치면
+  // 다시 확인(step_up)을 요청합니다. 지역만 다르거나 요소가 하나·둘뿐이면 이 규칙은 걸리지 않습니다.
+  // 엔진이 새 로그인 시각을 검증해 stepUp.verified를 true(0~900초)로 넘긴 요청은 허용합니다.
+  const access = describeStepUp(request);
+  if (access.matched) {
+    if (access.stepUp.verified) return answer(requestId, 'allow', 'approved', RULE_STEP_UP_REQUIRED);
+    return answer(requestId, 'step_up', 'step_up_required', RULE_STEP_UP_REQUIRED);
+  }
+  return answer(requestId, 'allow', 'approved', RULE_ZONE_ACCESS);
 }

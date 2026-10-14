@@ -6,6 +6,9 @@ import { databaseFailure, isUuid, memoView, readJsonBody, validateMemo } from '.
 
 const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
 const notFound = response => response.status(404).json({ error: 'NOT_FOUND' });
+// 거부 사유는 서버 로그에만 짧게 남깁니다(자원·동작·사유 코드). 사용자 ID·토큰·메모 본문은 기록하지 않고,
+// 응답은 없는 메모와 똑같이 두어 남의 메모가 있는지 알려 주지 않습니다.
+const logDeny = (action, reason) => console.warn(`memo: deny resource=student.memo.item action=${action} reason=${reason}`);
 
 // 목록(GET)과 추가(POST). 목록은 본인 메모만, 추가는 항상 확인된 사용자 ID로 저장합니다.
 export async function collectionRoute(request, response, { login, db }) {
@@ -47,6 +50,7 @@ export async function memoRoute(request, response, { login, db }) {
     // 소유자를 바꾸려는 값은 본인 ID와 같지 않으면 거부합니다. 수정 본문은 {title,body}만 씁니다.
     for (const key of ['owner_id', 'ownerId', 'userId']) {
       if (input[key] !== undefined && !same(input[key], login.userId)) {
+        logDeny('update', 'owner_change_not_allowed');
         return response.status(403).json({ error: 'OWNER_CHANGE_NOT_ALLOWED' });
       }
     }
@@ -57,7 +61,10 @@ export async function memoRoute(request, response, { login, db }) {
 
   const found = await db.from('user_notes').select('id, owner_id, title, body').eq('id', id).maybeSingle();
   if (found.error) return databaseFailure(response, found.error);
-  if (!found.data || !same(found.data.owner_id, login.userId)) return notFound(response);
+  if (!found.data || !same(found.data.owner_id, login.userId)) {
+    logDeny(request.method === 'GET' ? 'read' : request.method === 'PUT' ? 'update' : 'delete', found.data ? 'not_owner' : 'not_found');
+    return notFound(response);
+  }
 
   if (request.method === 'GET') return response.status(200).json(memoView(found.data));
 
@@ -67,13 +74,19 @@ export async function memoRoute(request, response, { login, db }) {
       .eq('id', id).eq('owner_id', login.userId).select('id, owner_id, title, body').maybeSingle();
     if (error) return databaseFailure(response, error);
     // 기존 행과 새 행의 소유자가 모두 본인일 때만 성공으로 답합니다.
-    if (!data || !same(data.owner_id, login.userId)) return notFound(response);
+    if (!data || !same(data.owner_id, login.userId)) {
+      logDeny('update', 'not_owner_at_write');
+      return notFound(response);
+    }
     return response.status(200).json(memoView(data));
   }
 
   const { data, error } = await db.from('user_notes').delete()
     .eq('id', id).eq('owner_id', login.userId).select('id').maybeSingle();
   if (error) return databaseFailure(response, error);
-  if (!data) return notFound(response);
+  if (!data) {
+    logDeny('delete', 'not_owner_at_write');
+    return notFound(response);
+  }
   return response.status(200).json({ id: data.id });
 }

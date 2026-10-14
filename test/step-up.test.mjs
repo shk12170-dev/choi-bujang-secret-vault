@@ -20,7 +20,7 @@ function assertValid({ request, response }) {
 }
 
 test('규칙 이름 step_up_required가 등록되어 있고 기기 규칙·기본 거부도 남아 있다', () => {
-  for (const id of ['starter.deny', 'device_registered', 'step_up_required']) assert.ok(RULE_IDS.includes(id), id);
+  for (const id of ['starter.deny', 'device_registered', 'step_up_required', 'zone_access']) assert.ok(RULE_IDS.includes(id), id);
   assert.equal(new Set(RULE_IDS).size, RULE_IDS.length);
 });
 
@@ -128,7 +128,7 @@ test('기기 규칙이 먼저다: 미등록 기기는 복합 사건이어도 dev
   assert.deepEqual([item.response.decision, item.response.reasonCode, item.response.ruleIds], ['deny', 'device_not_registered', ['device_registered']]);
   // 등록 기기라도 읽기가 아니면 기존처럼 기본 거부다.
   const write = await answer(make({ method: 'POST' }));
-  assert.deepEqual([write.response.decision, write.response.ruleIds], ['deny', ['starter.deny']]);
+  assert.deepEqual([write.response.decision, write.response.ruleIds], ['deny', ['zone_access']]);
 });
 
 test('이 규칙은 거부(deny)를 만들지 않는다: 어떤 조합에서도 영구 차단 없음', async () => {
