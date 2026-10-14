@@ -165,3 +165,19 @@ test('판정기는 토큰·헤더 같은 민감 값을 읽거나 기록하거나
   assert.ok(!JSON.stringify(response).includes(marker));
   assert.ok(!JSON.stringify(describeStepUp(request)).includes(marker));
 });
+
+test('직접 확인: 정상과 복합 이상 사건의 판정이 다르고, 추가 확인 응답에는 자료가 실리지 않는다', async () => {
+  const ordinary = await decide({ ...normal, requestId: randomUUID() });
+  const unusual = await decide(make());
+  assert.notEqual(ordinary.decision, unusual.decision);
+  assert.deepEqual([ordinary.decision, unusual.decision], ['allow', 'step_up']);
+  // 추가 확인(step_up) 응답은 결정에 필요한 5개 이름뿐이고, 메모·본문·토큰 같은 자료 필드가 없다.
+  assert.deepEqual(Object.keys(unusual).sort(), ['decision', 'reasonCode', 'requestId', 'ruleIds', 'schema']);
+  for (const value of Object.values(unusual)) assert.ok(typeof value === 'string' || Array.isArray(value));
+  assert.ok(unusual.ruleIds.every(id => RULE_IDS.includes(id)));
+  assert.ok(!/title|body|content|notes|memo|token|authorization/iu.test(JSON.stringify(unusual)));
+  // 추가 확인이 필요한 사건에서 판정기는 자료를 읽어 오지 않는다(데이터 접근 코드가 없다).
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/decider.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source.split('\n').filter(line => !line.trim().startsWith('//')).join('\n'), /supabase|\.from\(|\/api\/notes|user_notes|fetch\(/iu);
+});
