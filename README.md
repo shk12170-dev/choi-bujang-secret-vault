@@ -504,3 +504,39 @@ npm run fixture:7         # 정상 allow, 복합 이상 step_up
 | 저장소를 새로 받아 `npm install` 성공 | 커밋할 파일만 새 폴더에 풀고(`node_modules` 없음) `npm install`을 실행해 오류 없이 끝났습니다(패키지 10개). 같은 폴더에서 `decider:test` 네 항목, `fixture:7`, 구역·API·판정기 시험 63개도 통과했습니다. |
 | 판정기가 계약 이름만 읽고 응답 형식이 맞음 | `test/decider.test.mjs`·`test/zones.test.mjs`가 읽는 이름(`requestId`, `deviceRegistered`, `method`, `service`, `route`, `path`, `queryLength`, `signals`, `recentEvents`, `stepUp`)이 계약에 있는지, 응답 5개 이름과 `ruleIds ⊂ RULE_IDS`를 확인. `role`·`identity`·`device`·`geo`는 읽지 않음 |
 | `aleph.config.json`의 `step`이 8 이상 | `step: 8`. `src/attack-check.mjs`에 8단계 점검(제출 묶음 점검 상한 20개 안에서 중복을 합치고 구역·공지 점검 6개 추가)을 더했습니다. |
+
+## 9단계: 복합 이상을 찾아 회수를 제안함
+
+`src/detect.mjs`의 `detect(events)`가 가상 사건에서 복합 이상(처음 보는 네트워크 + 다량 조회)을 찾아, 접속 허용·거부 응답과는 **별개의 결과**로 `propose_revocation` 제안을 돌려줍니다. 이 함수는 제안만 하고 회수 API를 부르거나 기기 권한을 바꾸지 않습니다. 실제 회수와 회수까지 걸린 시간은 심판이 확인합니다.
+
+- 입력: 가명 사용자(`identity.sub` 또는 `subjectId`)·기기(`deviceId`)·요청 종류(`method`)·판정(`decision`)·시각(`at`)·네트워크(`network`)만 읽습니다. 메모 내용·토큰·실명·지역은 읽거나 복사하지 않습니다.
+- 규칙(학습용 기준값): 같은 사용자의 GET이 10분 구간에서 120건을 넘고, 그 구간에 처음 보는 네트워크가 함께 있을 때만 의심합니다. 정확히 120건, 평소 네트워크의 다량 조회, 지역만 다른 사건은 그대로 둡니다.
+- 결과: `{ action: 'propose_revocation', reasonCode: 'burst_read', subject, deviceId? }`. 확인된 가상 기기가 한 개일 때만 `deviceId`를 담고, 기기를 하나로 정할 수 없으면 범위를 넓히지 않고 `observe`로 둡니다.
+
+### 직접 확인할 것
+
+| 확인 | 결과 | 근거 |
+|---|---|---|
+| 복합 의심 사건만 회수 제안을 내는가? | **예** | `test/detect-rule.test.mjs`·`test/detect-revocation.test.mjs`: 복합 130건은 대상·이유 코드가 있는 제안, 평소 네트워크·적은 조회·정확히 120건·지역만 다름은 `observe` |
+| 정상 기기는 유지되는가? | **예** | 정상 기기와 의심 기기가 섞인 사건에서 의심 기기 한 개만 지목하고, 기기를 정할 수 없으면(동률·일부 사건만 기기 값 있음) 제안하지 않음 |
+
+### 확인 순서
+
+```bash
+node --test test/detect-input.test.mjs test/detect-rule.test.mjs test/detect-revocation.test.mjs
+npm run detect:test       # 탐지 연습 여섯 항목(심판 판정이 아님)
+npm run decider:test      # 판정기 응답 형식 그대로
+```
+
+### 확인 범위와 미검증
+
+- 이 저장소의 확인은 로컬 가상 사건 시험입니다. 심판의 실제 회수와 회수 시간은 측정하지 않았습니다.
+- 사건에 네트워크 값이 전혀 없으면(탐지 연습 계약 모양) 계약대로 다량 조회만 봅니다. 심판 사건이 이와 다른 방식으로 복합 조건을 표시하면 결과가 다를 수 있습니다.
+
+### 100점 항목 확인
+
+| 항목 | 확인 방법과 결과 |
+|---|---|
+| 저장소를 새로 받아 `npm install` 성공 | 커밋할 파일만 새 폴더에 풀고 `npm install` 후 시험 실행(아래 보고 참고) |
+| 판정기가 계약 이름만 읽고 응답 형식이 맞음 | `src/decider.mjs`는 이번 단계에서 바꾸지 않았고 `test/detect-revocation.test.mjs`가 응답 5개 이름을 다시 확인 |
+| `aleph.config.json`의 `step`이 9 이상 | `step: 9` |

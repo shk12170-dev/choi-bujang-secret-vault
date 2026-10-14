@@ -8,6 +8,7 @@ export async function runAttackChecks(config) {
   if (config.step === 6) return runStep6Checks(config);
   if (config.step === 7) return runStep7Checks(config);
   if (config.step === 8) return runStep8Checks(config);
+  if (config.step === 9) return runStep9Checks(config);
   if (config.step !== 1) throw new Error('이 단계의 공격 점검을 src/attack-check.mjs에 구현해 주세요.');
   let app;
   try {
@@ -375,5 +376,49 @@ async function runStep8Checks(config) {
       observed: `비로그인 PUT /api/notices/:id ${await httpProbe('PUT', `/api/notices/${id}`)}` },
     { attackId: 'anonymous_admin_notice_write', expected: '로그인 없는 강사 관리 경로 수정이 401 또는 403과 JSON 오류 문구로 거부됨(role 위조 포함)',
       observed: `비로그인 PUT /api/admin/notices/:id ${await httpProbe('PUT', `/api/admin/notices/${id}`)}` },
+  ];
+}
+
+// 9단계: 8단계 점검을 이어받되 점검 상한(20개) 안에서 겹치는 2개를 줄이고, 탐지 규칙의 가상 사건 점검 2개를 더합니다.
+// 탐지 부분은 이 저장소의 src/detect.mjs를 부르는 로컬 연습이며 심판 판정이 아닙니다.
+// 실제 회수와 회수까지 걸린 시간은 이 저장소에서 측정하지 않았고 심판이 가상 사건으로 확인합니다.
+async function runStep9Checks(config) {
+  const previous = await runStep8Checks(config);
+  const { detect } = await import('./detect.mjs');
+  const dropped = new Set([
+    'aleph_json_open', // aleph_json_allowed_routes·aleph_json_original_api_url이 같은 /aleph.json을 읽어 확인
+    'anonymous_note_create', // anonymous_notice_write_by_id·anonymous_admin_notice_write가 같은 방식의 쓰기 거부를 확인
+  ]);
+  const kept = previous.filter(item => !dropped.has(item.attackId));
+
+  const start = Date.UTC(2026, 9, 1, 0, 0, 0);
+  const reads = (count, extra = {}, { owner = 'learner_fixture', offsetMs = 0, intervalMs = 2000 } = {}) => Array.from({ length: count }, (_, index) => ({
+    at: new Date(start + offsetMs + index * intervalMs).toISOString(), method: 'GET', identity: { sub: owner }, ...extra,
+  }));
+  const deviceA = 'a1b2c3d4e5f60718';
+  const deviceB = 'f0e1d2c3b4a59687';
+  const shape = result => (result.action === 'propose_revocation'
+    ? `${result.action}(이유 ${result.reasonCode}, 사용자 있음, 기기 ${result.deviceId ? '한 개로 한정' : '한정 없음'})`
+    : result.action);
+
+  const complex = detect(reads(130, { deviceId: deviceA, network: 'unusual' }));
+  const practiceShape = detect(reads(121));
+  const mixed = detect([
+    ...reads(40, { deviceId: deviceB, network: 'usual' }, { intervalMs: 10000 }),
+    ...reads(130, { deviceId: deviceA, network: 'unusual' }, { offsetMs: 5000 }),
+  ].sort((a, b) => a.at.localeCompare(b.at)));
+  const normal = [
+    ['평소 네트워크 200건', detect(reads(200, { deviceId: deviceA, network: 'usual' }))],
+    ['처음 보는 네트워크 30건', detect(reads(30, { deviceId: deviceA, network: 'unusual' }))],
+    ['정확히 120건', detect(reads(120, { deviceId: deviceA, network: 'unusual' }))],
+    ['지역만 다름', detect(reads(30, { deviceId: deviceA, region: 'foreign' }))],
+    ['기기 둘이 같은 건수', detect([...reads(70, { deviceId: deviceA, network: 'unusual' }), ...reads(70, { deviceId: deviceB, network: 'unusual' }, { offsetMs: 1000 })].sort((a, b) => a.at.localeCompare(b.at)))],
+  ];
+  return [
+    ...kept,
+    { attackId: 'detect_complex_burst_proposal', expected: '처음 보는 네트워크와 다량 조회가 함께 있는 가상 사건만 대상과 이유 코드가 있는 회수 제안, 기기는 한 개로 한정',
+      observed: `로컬 가상 사건 복합 130건: ${shape(complex)} / 연습 계약 모양 121건: ${shape(practiceShape)} / 정상 기기가 섞인 사건: ${shape(mixed)}${mixed.deviceId === deviceA ? '(의심 기기만 지목)' : '(기기 지목 확인 필요)'}` },
+    { attackId: 'detect_normal_events_kept', expected: '정상 사건(평소 네트워크의 다량 조회·적은 조회·정확히 120건·지역만 다름·기기를 정할 수 없음)은 회수 제안 없이 observe',
+      observed: `로컬 가상 사건 ${normal.map(([name, result]) => `${name} ${shape(result)}`).join(' / ')}` },
   ];
 }
