@@ -248,7 +248,7 @@ Wazuh 형식의 공식 연습 경보(`xdr/fixtures/brute-force.json`, 28건, SHA
 ### 실행과 실제 결과
 
 ```bash
-npm run xdr:test                 # XDR 시험 47개(XDR-01·02·03·04 각 11개, 실행기 3개)
+npm run xdr:test                 # XDR 시험 58개(XDR-01~05 각 11개, 실행기 3개)
 npm run xdr:run -- brute-force   # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
 npm run xdr:replay               # 모듈별 모의 overlay 재생
 node xdr/brute-force/respond.mjs # 거부 후보·알림 로그 생성
@@ -396,7 +396,7 @@ Wazuh 형식의 공식 연습 경보(`xdr/fixtures/persistence.json`, 24건, SHA
 
 ```bash
 npm run xdr:run -- persistence    # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
-npm run xdr:replay                # 네 모듈 모의 overlay 재생
+npm run xdr:replay                # 모듈별 모의 overlay 재생
 node xdr/persistence/respond.mjs  # 거부 후보·알림 로그 생성
 npm run xdr:test                  # XDR 시험 47개
 ```
@@ -411,6 +411,54 @@ npm run xdr:test                  # XDR 시험 47개
 - **ZTNA 판정기:** `src/decider.mjs`는 `device_registered`·`step_up_required`·`zone_access` 규칙을 갖고 있지만 요청 계약(`docs/DECIDER_REQUEST.md`)에는 검증된 출발 IP나 PC 식별 값이 없습니다. 그래서 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 사용자가 보낸 주소·헤더를 신뢰해 차단하지 않으며, 실제 접속 허용·회수로 보고하지 않습니다.
 - **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
 - 공식 경보는 센서가 요약한 설명과 경로 한 개만 있어서, 서명 검증·파일 해시·실제 서비스 목록과의 대조는 하지 않았습니다. 다른 경보 묶음에서는 오분류가 있을 수 있으며, 로컬 시험 통과는 심판 통과가 아닙니다.
+
+## 보너스 xdr-05: 권한 가로채기(권한 상승) 탐지
+
+Wazuh 형식의 공식 연습 경보(`xdr/fixtures/privilege.json`, 26건, SHA256 `9F57CFC5…0392E9`)에서 평범한 계정의 관리자 그룹 추가와 관리자 명령 실행을 가려 행동을 정합니다. 경보 원본은 고치지 않습니다. 계정 이름은 판단에 쓰지 않고 이유·알림 로그·거부 규칙에 남기지 않습니다.
+
+### 구성
+
+| 파일 | 역할 |
+|---|---|
+| `xdr/privilege/read-alerts.mjs` | 확인용 읽기 모듈(공통 구현 `xdr/read-alerts.mjs`). 시각·출발 주소·계정·규칙 수준·설명만 뽑고 비밀값처럼 보이는 값은 `[가림]`으로 바꿉니다. `decide.mjs`는 이 파일을 부르지 않습니다. |
+| `xdr/privilege/patterns.json` | 패턴 세 개(이름·찾는 조건·근거 한 줄·출처)와 일부러 막지 않는 정상·애매한 사례. 근거는 MITRE ATT&CK T1068, T1078 |
+| `xdr/privilege/decide.mjs` | 제출용 판단 모듈. `decide(alert)` 하나만 내보내며 **`import`가 없는 단일 ES 모듈**이고 파일·네트워크·시계를 쓰지 않습니다. 패턴의 이름·조건·근거는 파일 맨 위 상수입니다. |
+| `xdr/privilege/respond.mjs` | `block`만 15분 만료·근거 경보 번호가 있는 추가 거부 후보로 `xdr/deny-rules.json`에 넣고(다른 모듈 규칙 보존), 알림을 `xdr/alerts.log`에 쌓습니다. |
+| `xdr/privilege/result.json` | `npm run xdr:run -- privilege` 결과(`aleph.xdr.result.v1`) |
+| `test/privilege.test.mjs` | 읽기·분류·단어·정상 관리 계정 단독 비차단·독립 실행·이유에 계정 없음·차단 후보·다섯 모듈 겹침 시험 |
+
+### 패턴과 판단 기준 (학습용 기준값, 보편 임계값 아님)
+
+| 패턴 | 기법 | 신호 |
+|---|---|---|
+| `admin-group-addition` | T1078 | 평범한 계정의 관리자 그룹 추가·재가입·여러 계정 연속 추가 |
+| `unfamiliar-admin-command` | T1068 | 관리자 명령 실행·세션 권한 상승·다른 계정의 권한 사용 |
+| `off-hours-privilege-use` | T1078 | 수업 시간 밖·낯선 주소에서의 권한 사용 |
+
+- **차단(block):** 권한 상승 사건 하나 이상과 정황(원격·처음 보는 주소, 수업 시간 밖, 추가 직후 명령 실행) 또는 다른 사건이 겹쳐 서로 다른 근거가 **둘 이상**이고 경보 수준이 10 이상일 때(0.88~0.97)
+- **알림(alert):** 근거가 하나뿐(평소 주소의 관리자 명령 한 번, 관리자 그룹 추가만 있고 정황 없음 등)이거나, 변경이 없는 사례(권한 상승 창 취소, 일반 그룹 추가, 조회만 함, 실패한 명령 한 건)이거나 수준이 낮은 경우(0.55~0.70)
+- **기록(record):** 근거가 없고 수준 4 이하의 정상 이벤트(로그인·로그아웃, 그룹 읽기만, 비밀번호 변경, 수업용 관리 계정의 평소 주소 로그인, 서비스 계정 작업 확인)
+- "관리자 그룹은 아닙니다", "변경은 없습니다", "취소됐습니다"처럼 상승이 일어나지 않았다고 말하는 문장은 근거에서 뺍니다. 관리자라는 단어, 관리 계정 이름, 수준, 주소, 계정, 경보 번호 하나만으로는 막지 않고, 저장된 `result.json`을 정답으로 읽지 않습니다.
+
+### 실행과 실제 결과
+
+```bash
+npm run xdr:run -- privilege      # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
+npm run xdr:replay                # 다섯 모듈 모의 overlay 재생
+node xdr/privilege/respond.mjs    # 거부 후보·알림 로그 생성
+npm run xdr:test                  # XDR 시험 58개
+```
+
+- 분류: **block 9 · alert 8 · record 9** (총 26건). 명확한 공격 `pv-01`~`pv-09`는 `block`, 애매한 시도 `pv-10`~`pv-17`은 `alert`, 정상 이벤트 `pv-18`~`pv-26`은 `record`입니다. **정상·애매한 이벤트를 막은 경우는 없습니다.** 이 구분은 경보 설명·그룹·수준으로 판단한 것이며 저장소에 정답표는 없습니다.
+- 다섯 모듈 모의 overlay: **attackDenied 43(10+8+8+8+9), normalDenied 0, ambiguousDenied 0, expiredDenied 0**
+- 독립 실행: `decide.mjs` 파일 하나를 `data:` URL로 불러와도 26건 결과가 같습니다.
+
+### 연결 범위와 한계
+
+- **세션 회수의 의미:** "그 계정의 세션을 거둔다"는 경보의 출발 주소에 대한 15분짜리 추가 거부 후보를 만드는 것으로 모델링했습니다. 계정 단위 세션 회수(토큰 폐기)는 하지 않았고, 후보를 기존 판정 위에 덧씌우는 `applyDenyOverlay()`는 모의 재생에서만 검증했습니다.
+- **ZTNA 판정기:** `src/decider.mjs`의 요청 계약(`docs/DECIDER_REQUEST.md`)에는 검증된 출발 IP나 계정 이름이 없고 `subjectId`는 가명 주체 ID입니다. 그래서 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 사용자가 보낸 주소·계정·헤더를 신뢰해 차단하지 않으며, 실제 접속 허용·회수로 보고하지 않습니다.
+- **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
+- 공식 경보는 센서가 요약한 설명과 그룹 이름만 있어서, 실제 그룹 변경 이력·승인 기록과의 대조는 하지 않았습니다. 다른 경보 묶음에서는 오분류가 있을 수 있으며, 로컬 시험 통과는 심판 통과가 아닙니다.
 
 ## 6단계: 등록한 기기만 자료실에 들어옴
 
