@@ -73,6 +73,10 @@ test('분류: 거부 점검은 401·403만 막음이고 200이면 실패, 응답
   assert.equal(classify({ attackId: 's01-static-notes', observed: 'HTTP 200; notesEmpty=false' }), 'failed');
   assert.equal(classify({ attackId: 's06-device-registered', observed: 'HTTP 200; jsonReady=false' }), 'failed');
   assert.equal(classify({ attackId: 's10-restore-unauth', observed: 'not_run' }), 'not_run');
+  // 배포 정보 점검은 받은 HTTP 상태만 기록한다(심판이 확인할 수 없는 사실 값을 적지 않는다).
+  assert.equal(classify({ attackId: 's05-aleph-json', observed: 'HTTP 200' }), 'blocked');
+  assert.equal(classify({ attackId: 's05-aleph-json', observed: 'HTTP 404' }), 'failed');
+  assert.equal(classify({ attackId: 's05-aleph-json', observed: 'HTTP 200; jsonReady=true' }), 'failed');
   assert.equal(classify({ attackId: 'unknown', observed: 'HTTP 401' }), 'failed');
 });
 

@@ -1,13 +1,14 @@
 // npm run checks:table — artifacts/submission.json의 실제 점검 행으로 사례별 표(마크다운)를 만듭니다.
 //   --write-readme 를 붙이면 README.md 아래쪽에 「사례별 실측 표」를 덧붙입니다. 이미 있는 표(과거 측정 기록)는 바꾸지 않습니다.
 import { readFileSync, appendFileSync } from 'node:fs';
+import { classify } from '../src/checks-core.mjs';
 
 const submission = JSON.parse(readFileSync(new URL('../artifacts/submission.json', import.meta.url), 'utf8'));
 const when = new Date().toISOString();
 const rows = submission.attackAttempts;
 const stageOf = id => (/^s(\d+)-/u.exec(id) ?? [])[1] ?? '-';
-const result = observed => (observed === 'not_run' ? 'not_run' : /^HTTP (401|403)$/u.test(observed) || /; (jsonReady|notesEmpty)=true$/u.test(observed) ? 'blocked' : 'failed');
-const count = value => rows.filter(row => result(row.observed) === value).length;
+const resultOf = row => classify(row);
+const count = value => rows.filter(row => resultOf(row) === value).length;
 const lines = [
   '',
   `### 사례별 실측 표 (측정 커밋 \`${submission.commit.slice(0, 12)}\`, 측정 시각 ${when})`,
@@ -16,7 +17,7 @@ const lines = [
   '',
   '| 단계 | 점검 ID | 기대 조건 | 관측 | 결과 |',
   '|---|---|---|---|---|',
-  ...rows.map(row => `| ${stageOf(row.attackId)} | ${row.attackId} | ${row.expected} | ${row.observed} | ${result(row.observed)} |`),
+  ...rows.map(row => `| ${stageOf(row.attackId)} | ${row.attackId} | ${row.expected} | ${row.observed} | ${resultOf(row)} |`),
   '',
 ];
 const text = `${lines.join('\n')}\n`;

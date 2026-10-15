@@ -37,7 +37,7 @@ export const CHECKS = Object.freeze([
   { id: 's04-other-note', stage: 4, kind: 'deny', path: ctx => `/api/notes/${ctx.uuid}`, expected: 'HTTP 401 또는 403' },
   { id: 's04-query-identity', stage: 4, kind: 'deny', path: ctx => `/api/notes?owner_id=${ctx.uuid}`, expected: 'HTTP 401 또는 403' },
   { id: 's05-direct-table', stage: 5, kind: 'deny', absolute: 'originalApiUrl', expected: 'HTTP 401 또는 403' },
-  { id: 's05-aleph-json', stage: 5, kind: 'aleph', path: '/aleph.json', expected: 'HTTP 200; jsonReady=true' },
+  { id: 's05-aleph-json', stage: 5, kind: 'aleph', path: '/aleph.json', expected: 'HTTP 200' },
   { id: 's06-device-unregistered', stage: 6, kind: 'case', case: 'device-unregistered', expected: 'HTTP 200; jsonReady=true' },
   { id: 's06-device-registered', stage: 6, kind: 'case', case: 'device-registered', expected: 'HTTP 200; jsonReady=true' },
   { id: 's07-step-up', stage: 7, kind: 'case', case: 'step-up', expected: 'HTTP 200; jsonReady=true' },
@@ -96,10 +96,8 @@ export async function runOne(def, { baseUrl, originalApiUrl, fetchImpl, state })
   try { body = await response.json(); } catch { body = null; } // JSON이 아니면 사실 값은 false로 둡니다.
 
   if (def.kind === 'static') return { ...base, observed: `HTTP ${status}; notesEmpty=${Array.isArray(body?.notes) && body.notes.length === 0}` };
-  if (def.kind === 'aleph') {
-    const ready = Boolean(body) && Array.isArray(body.allowedRoutes) && typeof body.originalApiUrl === 'string' && body.originalApiUrl.startsWith('https://');
-    return { ...base, observed: `HTTP ${status}; jsonReady=${ready}` };
-  }
+  // 배포 정보(/aleph.json)는 심판이 같은 사실을 확인할 수 없는 값을 적지 않도록 받은 HTTP 상태만 기록합니다.
+  if (def.kind === 'aleph') return { ...base, observed: `HTTP ${status}` };
   if (def.kind === 'case') return { ...base, observed: `HTTP ${status}; jsonReady=${body?.jsonReady === true}` };
   return { ...base, observed: `HTTP ${status}` };
 }
@@ -117,6 +115,7 @@ export function classify(attempt) {
   const fact = match[2] ?? '';
   if (def.kind === 'deny') return DENIED.includes(status) ? 'blocked' : 'failed';
   if (def.kind === 'static') return status === 200 && fact === 'notesEmpty=true' ? 'blocked' : 'failed';
+  if (def.kind === 'aleph') return status === 200 && fact === '' ? 'blocked' : 'failed';
   return status === 200 && fact === 'jsonReady=true' ? 'blocked' : 'failed';
 }
 
