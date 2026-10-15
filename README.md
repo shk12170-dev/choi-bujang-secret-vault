@@ -248,7 +248,7 @@ Wazuh 형식의 공식 연습 경보(`xdr/fixtures/brute-force.json`, 28건, SHA
 ### 실행과 실제 결과
 
 ```bash
-npm run xdr:test                 # XDR 시험 58개(XDR-01~05 각 11개, 실행기 3개)
+npm run xdr:test                 # XDR 시험 69개(XDR-01~06 각 11개, 실행기 3개)
 npm run xdr:run -- brute-force   # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
 npm run xdr:replay               # 모듈별 모의 overlay 재생
 node xdr/brute-force/respond.mjs # 거부 후보·알림 로그 생성
@@ -459,6 +459,57 @@ npm run xdr:test                  # XDR 시험 58개
 - **ZTNA 판정기:** `src/decider.mjs`의 요청 계약(`docs/DECIDER_REQUEST.md`)에는 검증된 출발 IP나 계정 이름이 없고 `subjectId`는 가명 주체 ID입니다. 그래서 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 사용자가 보낸 주소·계정·헤더를 신뢰해 차단하지 않으며, 실제 접속 허용·회수로 보고하지 않습니다.
 - **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
 - 공식 경보는 센서가 요약한 설명과 그룹 이름만 있어서, 실제 그룹 변경 이력·승인 기록과의 대조는 하지 않았습니다. 다른 경보 묶음에서는 오분류가 있을 수 있으며, 로컬 시험 통과는 심판 통과가 아닙니다.
+
+## 보너스 xdr-06: 자료 빼돌리기(반출) 탐지
+
+Wazuh 형식의 공식 연습 경보(`xdr/fixtures/exfiltration.json`, 30건, SHA256 `762C99F5…79547F`)에서 처음 보는 목적지로 나가는 대용량 전송을 가려 행동을 정합니다. 경보 원본은 고치지 않습니다. 이 과제는 다른 보너스와 달리 **출발 주소가 아니라 목적지를 막는** 후보를 만듭니다.
+
+### 처음 제출에서 실패한 까닭과 고친 점
+
+첫 제출은 `XDR_DECIDE_NOT_RUNNING`(점수 0)이었습니다. 이 과제의 모듈 `xdr/exfiltration/`을 아직 만들지 않아 심판이 `decide.mjs`를 찾지 못한 것이 원인이었고, 아래 구성을 만들어 해결했습니다. 목적지를 막기 위해 공통 연결 부품(`xdr/ztna-overlay.mjs`)에 `target: 'destination'` 옵션을 추가했으며 기존 모듈의 동작은 바꾸지 않았습니다.
+
+### 구성
+
+| 파일 | 역할 |
+|---|---|
+| `xdr/exfiltration/read-alerts.mjs` | 확인용 읽기 모듈(공통 구현 `xdr/read-alerts.mjs`). 시각·출발 주소·계정·규칙 수준·설명만 뽑고 비밀값처럼 보이는 값은 `[가림]`으로 바꿉니다. `decide.mjs`는 이 파일을 부르지 않습니다. |
+| `xdr/exfiltration/patterns.json` | 패턴 세 개(이름·찾는 조건·근거 한 줄·출처)와 일부러 막지 않는 정상·애매한 사례. 근거는 MITRE ATT&CK T1041, T1048 |
+| `xdr/exfiltration/decide.mjs` | 제출용 판단 모듈. `decide(alert)` 하나만 내보내며 **`import`가 없는 단일 ES 모듈**이고 파일·네트워크·시계를 쓰지 않습니다. 패턴의 이름·조건·근거는 파일 맨 위 상수입니다. |
+| `xdr/exfiltration/respond.mjs` | `block`만 15분 만료·근거 경보 번호가 있는 **목적지(egress) 거부 후보**로 `xdr/deny-rules.json`에 넣고(다른 모듈 규칙 보존), 알림을 `xdr/alerts.log`에 쌓습니다. 정상 이벤트가 쓴 목적지는 규칙으로 만들지 않습니다. |
+| `xdr/exfiltration/result.json` | `npm run xdr:run -- exfiltration` 결과(`aleph.xdr.result.v1`) |
+| `test/exfiltration.test.mjs` | 읽기·분류·단일 근거 비차단·독립 실행·이유에 계정·주소 없음·목적지 규칙·여섯 모듈 겹침과 만료 시험 |
+
+### 패턴과 판단 기준 (학습용 기준값, 보편 임계값 아님)
+
+| 패턴 | 기법 | 신호 |
+|---|---|---|
+| `large-transfer-new-destination` | T1048 | 대용량 전송 + 처음 보는 목적지·평소 쓰지 않던 포트·여러 목적지 |
+| `off-hours-archive-exfiltration` | T1048 | 수업 시간 밖의 압축 파일 반출 |
+| `repeated-c2-channel-transfer` | T1041 | 명령 통로·같은 목적지로 반복된 대용량 전송 |
+
+- **차단(block):** 대량 전송(5천만 바이트 이상 또는 파일 50건 이상) + 이상 정황(처음 보는 목적지, 수업 시간 밖, 압축 파일, 평소 쓰지 않던 포트, 명령 통로, 반복 3번 이상, 자료실 전체 복사, 여러 목적지) 하나 이상 + 경보 수준 10 이상 + **막을 목적지 주소가 경보에 있을 것**(0.88~0.97)
+- **알림(alert):** 전송량이 중간(5백만 바이트 이상)이거나, 정황은 있지만 대량이 아니거나, 대량이어도 정황·목적지가 없거나 수준이 낮은 경우(0.55~0.70)
+- **기록(record):** 수준 4 이하의 소량 정상 이벤트(메모 읽기, 공지 읽기, 수업 자료 주소로의 작은 동기화, 새로고침, 로그아웃 등)
+- "외부 전송은 아직 없습니다", "큰 파일은 아닙니다"처럼 전송이 없다고 말하는 문장은 근거에서 뺍니다. 전송량·압축 파일·낯선 목적지·수준·주소·계정·경보 번호·순서 하나만으로는 막지 않고, 저장된 `result.json`을 정답으로 읽지 않습니다.
+
+### 실행과 실제 결과
+
+```bash
+npm run xdr:run -- exfiltration   # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
+npm run xdr:replay                # 여섯 모듈 모의 overlay 재생
+node xdr/exfiltration/respond.mjs # 목적지 거부 후보·알림 로그 생성
+npm run xdr:test                  # XDR 시험 69개
+```
+
+- 분류: **block 10 · alert 10 · record 10** (총 30건). 명확한 공격 `ex-01`~`ex-10`은 `block`, 애매한 시도 `ex-11`~`ex-20`은 `alert`, 정상 이벤트 `ex-21`~`ex-30`은 `record`입니다. **정상·애매한 이벤트를 막은 경우는 없습니다.** 이 구분은 경보 설명·전송량·수준으로 판단한 것이며 저장소에 정답표는 없습니다.
+- 여섯 모듈 모의 overlay: **attackDenied 53(10+8+8+8+9+10), normalDenied 0, ambiguousDenied 0, expiredDenied 0**. 이 모듈의 목적지 규칙은 그 목적지로 향하는 요청에만 걸리고, 같은 값을 출발 주소로 가진 요청은 막지 않습니다.
+- 독립 실행: `decide.mjs` 파일 하나를 `data:` URL로 불러와도 30건 결과가 같습니다.
+
+### 연결 범위와 한계
+
+- **ZTNA 판정기:** 요청 계약(`docs/DECIDER_REQUEST.md`)에는 목적지 주소 항목이 없고 이 판정기는 자료실로 들어오는 요청만 판정합니다. 그래서 **목적지 차단은 운영 판정기에 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 목적지 거부 후보를 기존 판정 위에 덧씌우는 `applyDenyOverlay()`는 모의 재생에서만 검증했으며 실제 반출 차단으로 보고하지 않습니다.
+- **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
+- 공식 경보는 센서가 요약한 전송량·파일 수·목적지만 있어서 실제 전송 내용·평소 전송량 기준선과의 대조는 하지 않았습니다. 다른 경보 묶음에서는 오분류가 있을 수 있으며, 로컬 시험 통과는 심판 통과가 아닙니다.
 
 ## 6단계: 등록한 기기만 자료실에 들어옴
 

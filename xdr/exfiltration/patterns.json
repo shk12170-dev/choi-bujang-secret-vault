@@ -1,0 +1,36 @@
+{
+  "schema": "aleph.xdr.patterns.v1",
+  "moduleKey": "exfiltration",
+  "source": "MITRE ATT&CK T1041 Exfiltration Over C2 Channel https://attack.mitre.org/techniques/T1041/ · T1048 Exfiltration Over Alternative Protocol https://attack.mitre.org/techniques/T1048/",
+  "note": "아래 숫자는 이 학습 구현의 기준값이며 보편 임계값이 아니다. 차단은 대량 전송(5천만 바이트 이상 또는 파일 50건 이상)과 목적지·시각·방식의 이상 정황(처음 보는 목적지, 수업 시간 밖, 압축 파일, 평소 쓰지 않던 포트, 명령 통로, 반복 전송, 자료실 전체 복사, 여러 목적지)이 하나 이상 겹치고 경보 수준이 10 이상일 때만 내린다. 전송량 하나, 압축 파일 생성, 작은 파일의 낯선 목적지, 평소 목적지의 파일 수 증가, 수준, 주소, 계정, 경보 번호 하나만으로는 막지 않는다. 막는 대상은 출발 주소가 아니라 목적지이며, 정상 이벤트가 쓴 목적지는 막지 않는다. 계정 이름은 판단에 쓰지 않고 이유와 로그에 남기지 않는다.",
+  "patterns": [
+    {
+      "id": "large-transfer-new-destination",
+      "name": "처음 보는 목적지로 대용량 전송",
+      "technique": "T1048",
+      "condition": "전송량이 5천만 바이트 이상이거나 파일 50건 이상이고, 처음 보는 목적지·평소 쓰지 않던 포트·여러 목적지 가운데 하나 이상이 함께 보이며 경보 수준 10 이상일 때 차단 후보. 중간 크기 전송이나 작은 파일의 낯선 목적지는 알림.",
+      "evidence": "T1048 Exfiltration Over Alternative Protocol: 공격자는 평소 쓰지 않는 목적지·포트·프로토콜로 큰 자료를 보내 정상 통신과 구별되지 않게 반출하며, 처음 보는 목적지로의 대용량 전송이 대표 흔적이다.",
+      "reference": "https://attack.mitre.org/techniques/T1048/"
+    },
+    {
+      "id": "off-hours-archive-exfiltration",
+      "name": "업무 시간 밖 압축 파일 반출",
+      "technique": "T1048",
+      "condition": "압축 파일이 수업 시간 밖에 외부 주소로 나가고 전송량이 5천만 바이트 이상이며 경보 수준 10 이상일 때 차단 후보. 압축 파일을 만들기만 했거나 외부 전송이 없는 경우는 알림.",
+      "evidence": "T1048과 수집 후 반출 흐름: 공격자는 자료를 압축해 묶은 뒤 사람이 없는 시간대에 한꺼번에 내보내는 경우가 많아 시각과 압축 파일이 함께 보이면 의심 단서가 된다.",
+      "reference": "https://attack.mitre.org/techniques/T1048/"
+    },
+    {
+      "id": "repeated-c2-channel-transfer",
+      "name": "명령 통로로 반복된 대용량 전송",
+      "technique": "T1041",
+      "condition": "같은 목적지로 대용량 전송이 3번 이상 반복되거나 명령 통로로 큰 파일이 보내지고, 전송량이 5천만 바이트 이상이며 경보 수준 10 이상일 때 차단 후보. 명령 통로에 짧은 자료 이름이 몇 번 보인 정도는 알림.",
+      "evidence": "T1041 Exfiltration Over C2 Channel: 공격자는 이미 쓰고 있는 명령 통제 통로로 자료를 반복해서 내보내므로 같은 목적지로의 대용량 반복 전송이 대표 흔적이다.",
+      "reference": "https://attack.mitre.org/techniques/T1041/"
+    }
+  ],
+  "notBlockedOnPurpose": [
+    "정상 이벤트(내 메모 읽기, 반 공지 읽기, 수업 자료 주소로의 작은 동기화, 검색 결과 한 페이지, 화면 새로고침, 메모 저장, 첨부 그림 열기, 세션 확인, 로그아웃): 기록(record)만 남긴다. 전송 크기가 작고 목적지가 평소 자료실 주소다.",
+    "중간 크기 파일 한 건, 평소보다 한 번 높은 전송량(수업 자료 주소), 압축 파일 생성만 하고 외부 전송 없음, 작은 파일의 낯선 목적지, 읽기 뒤 전송 1건, 백업처럼 보이는 전송, 평소 목적지의 파일 수 증가, 실패한 전송, 명령 통로의 짧은 이름 몇 건, 일부만 다른 주소로 나감: 대량 전송 근거가 없거나 하나뿐인 애매한 사례라 알림(alert)으로만 남긴다."
+  ]
+}
