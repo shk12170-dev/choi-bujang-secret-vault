@@ -840,3 +840,31 @@ npm run bundle                                                 # 제출 묶음(�
 - 쓰기 요청이 필요한 점검(복원 POST, 공지 수정 PUT)은 보내지 않고 `not_run`으로 둡니다.
 - 요청은 이전 단계 점검과 같은 모양(URL 객체, `redirect: 'error'`, `AbortSignal.timeout`)으로 차례대로 보내고, 응답은 `status`와 `json()`만 읽습니다. 응답을 받지 못한 요청은 결과를 적지 않고 `not_run`으로 남깁니다.
 - 번들 점검 경로는 `node:crypto`만 쓰며 `Buffer`·`Response` 전역에 기대지 않습니다(`test/bundle-read-only.test.mjs`, `test/checks-core.test.mjs`).
+
+### 사례별 실측 표 (측정 커밋 `9ae863dcd14a`, 측정 시각 2026-10-15T05:26:23.327Z)
+
+총 20건 · blocked 18 · failed 0 · not_run 2. 아래 행은 `npm run bundle`이 만든 `artifacts/submission.json`의 `attackAttempts`를 그대로 옮긴 것입니다. 이후 문서 커밋이 생겨도 이 표의 측정 커밋은 바꾸지 않습니다.
+
+| 단계 | 점검 ID | 기대 조건 | 관측 | 결과 |
+|---|---|---|---|---|
+| 01 | s01-static-notes | HTTP 200; notesEmpty=true | HTTP 200; notesEmpty=true | blocked |
+| 03 | s03-unauth-list | HTTP 401 또는 403 | HTTP 401 | blocked |
+| 03 | s03-fake-token | HTTP 401 또는 403 | HTTP 401 | blocked |
+| 04 | s04-other-note | HTTP 401 또는 403 | HTTP 401 | blocked |
+| 04 | s04-query-identity | HTTP 401 또는 403 | HTTP 401 | blocked |
+| 05 | s05-direct-table | HTTP 401 또는 403 | HTTP 401 | blocked |
+| 05 | s05-aleph-json | HTTP 200; jsonReady=true | HTTP 200; jsonReady=true | blocked |
+| 06 | s06-device-unregistered | HTTP 200; jsonReady=true | HTTP 200; jsonReady=true | blocked |
+| 06 | s06-device-registered | HTTP 200; jsonReady=true | HTTP 200; jsonReady=true | blocked |
+| 07 | s07-step-up | HTTP 200; jsonReady=true | HTTP 200; jsonReady=true | blocked |
+| 08 | s08-zone-list | HTTP 200; jsonReady=true | HTTP 200; jsonReady=true | blocked |
+| 08 | s08-zone-write | HTTP 200; jsonReady=true | HTTP 200; jsonReady=true | blocked |
+| 08 | s08-notice-unauth | HTTP 401 또는 403 | HTTP 401 | blocked |
+| 09 | s09-detect-compound | HTTP 200; jsonReady=true | HTTP 200; jsonReady=true | blocked |
+| 09 | s09-detect-normal | HTTP 200; jsonReady=true | HTTP 200; jsonReady=true | blocked |
+| 10 | s10-policy-verified | HTTP 200; jsonReady=true | HTTP 200; jsonReady=true | blocked |
+| 10 | s10-restore-unauth | not_run(POST가 필요해 격리 환경에서 보내지 않음) | not_run | not_run |
+| 11 | s11-device-unauth | HTTP 401 또는 403 | HTTP 401 | blocked |
+| 11 | s11-notice-write | not_run(PUT이 필요해 격리 환경에서 보내지 않음) | not_run | not_run |
+| 12 | s12-ops-unauth | HTTP 401 또는 403 | HTTP 401 | blocked |
+
