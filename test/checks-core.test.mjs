@@ -17,7 +17,7 @@ function routeFetch(log) {
     assert.ok(url instanceof URL, '요청 주소는 URL 객체여야 한다');
     assert.equal(init.redirect, 'error');
     assert.ok(init.signal);
-    log.push({ url: String(url), method: String(init.method ?? 'GET').toUpperCase(), headers: init.headers ?? {} });
+    log.push({ url: String(url), method: String(init.method ?? 'GET').toUpperCase(), headers: init.headers ?? {}, evidence: init.alephEvidence });
     const parsed = new URL(url);
     if (parsed.hostname === 'db.example.invalid') return reply(401, { message: 'No API key' });
     if (parsed.pathname === '/data.json') return reply(200, { notes: [] });
@@ -40,6 +40,12 @@ test('점검은 20건 이하이고 GET만 24건 이하로 보내며 점검마다
   const notRun = attempts.filter(item => item.observed === 'not_run').map(item => item.attackId).sort();
   assert.deepEqual(notRun, ['s10-restore-unauth', 's11-notice-write']);
   assert.equal(log.length, CHECKS.length - notRun.length); // 점검당 한 건
+  // 실제로 보낸 요청마다 점검 번호와 서로 다른 요청 식별 값이 붙고, 보내지 않은 점검에는 만들지 않는다.
+  const keys = log.map(item => item.evidence?.requestKey);
+  assert.ok(keys.every(key => /^[0-9a-f-]{36}$/u.test(key)));
+  assert.equal(new Set(keys).size, keys.length);
+  const sentIds = new Set(log.map(item => item.evidence.caseId));
+  for (const item of attempts) assert.equal(sentIds.has(item.attackId), item.observed !== 'not_run', item.attackId);
 });
 
 test('응답을 받지 못한 요청은 결과를 적지 않고 not_run으로 남긴다', async () => {

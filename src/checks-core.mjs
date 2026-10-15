@@ -78,7 +78,11 @@ export async function runOne(def, { baseUrl, originalApiUrl, fetchImpl, state })
   if (state.sent >= MAX_REQUESTS) return { ...base, observed: 'not_run' };
   state.sent += 1;
 
-  const init = { redirect: 'error', signal: AbortSignal.timeout(10000) };
+  // 실제로 보내는 요청에만 점검 번호와 요청마다 다른 식별 값을 붙입니다(헤더·URL이 아님). 보내지 않은 점검에는 만들지 않습니다.
+  const init = {
+    redirect: 'error', signal: AbortSignal.timeout(10000),
+    alephEvidence: { caseId: def.id, requestKey: randomUUID() },
+  };
   if (def.forged) init.headers = { Authorization: `Bearer ${state.forgedToken}` };
   let response;
   try {
@@ -99,6 +103,9 @@ export async function runOne(def, { baseUrl, originalApiUrl, fetchImpl, state })
   if (def.kind === 'case') return { ...base, observed: `HTTP ${status}; jsonReady=${body?.jsonReady === true}` };
   return { ...base, observed: `HTTP ${status}` };
 }
+
+// 요약 API가 점검 행에 붙이는 단계 번호
+export const stageOf = attackId => CHECKS.find(item => item.id === attackId)?.stage ?? null;
 
 // 점검 결과 분류: blocked(기대대로 막거나 확인됨) · failed · not_run
 export function classify(attempt) {

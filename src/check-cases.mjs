@@ -19,16 +19,16 @@ const DECIDER_CASES = {
 const DETECT_CASES = { 'detect-compound': 'compound_130_reads', 'detect-normal': 'normal_30_reads' };
 export const CASE_IDS = Object.freeze([...Object.keys(DECIDER_CASES), ...Object.keys(DETECT_CASES), 'policy-verified']);
 
-const frame = { engine: 'ALEPH SDP 엔진', engineEnforced: 'not_run' };
+const frame = { fixtureType: 'fixed_fixture', engine: 'ALEPH SDP 엔진', engineEnforced: 'not_run' };
 
 export async function evaluateCase(id) {
   if (id in DECIDER_CASES) {
     const probe = (await deciderProbes()).find(item => item.id === DECIDER_CASES[id]);
-    return { case: id, source: '학생 판정기', ...frame, expected: probe.expected, actual: probe.actual, jsonReady: probe.matches, ruleIds: [...RULE_IDS] };
+    return { case: id, caseId: id, source: '학생 판정기', ...frame, expected: probe.expected, actual: probe.actual, ready: probe.matches, jsonReady: probe.matches, ruleIds: [...RULE_IDS] };
   }
   if (id in DETECT_CASES) {
     const probe = detectionProbes().find(item => item.id === DETECT_CASES[id]);
-    return { case: id, source: '학생 탐지 규칙', ...frame, expected: probe.expected, actual: probe.actual, jsonReady: probe.matches };
+    return { case: id, caseId: id, source: '학생 탐지 규칙', ...frame, expected: probe.expected, actual: probe.actual, ready: probe.matches, jsonReady: probe.matches };
   }
   if (id === 'policy-verified') {
     const current = buildPolicy({
@@ -38,9 +38,9 @@ export async function evaluateCase(id) {
     const preview = previewRestore(policySnapshot, current);
     const verified = preview.ok && preview.unchanged;
     return {
-      case: id, source: '학생 정책 사본', ...frame, expected: 'verified_unchanged',
+      case: id, caseId: id, source: '학생 정책 사본', ...frame, expected: 'verified_unchanged',
       actual: preview.ok ? (preview.unchanged ? 'verified_unchanged' : 'verified_changed') : preview.reason,
-      jsonReady: verified, version: preview.ok ? preview.version : null,
+      ready: verified, jsonReady: verified, version: preview.ok ? preview.version : null,
     };
   }
   return null;

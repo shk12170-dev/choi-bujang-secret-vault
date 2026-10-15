@@ -31,6 +31,9 @@
     .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
     .status { margin: 0 0 12px; font-size: 16px; }
     .error { margin: 10px 0 0; color: #ffb3c0; font-size: 15px; }
+    #checks-numbers { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; font-size: 15px; }
+    #checks-numbers dt { color: #8ad8df; }
+    #checks-numbers dd { margin: 0; }
     .device dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; font-size: 15px; }
     .device dt { color: #8ad8df; }
     .device dd { margin: 0; color: #ecf4ff; }
@@ -57,6 +60,17 @@
         <button type="button" id="device-refresh" class="secondary" hidden>상태 다시 확인</button>
       </div>
       <p class="error" id="device-error" role="alert" hidden></p>
+    </section>
+    <section class="panel" id="checks-public" aria-label="점검 요약">
+      <h2>점검 요약</h2>
+      <dl id="checks-numbers">
+        <dt>총</dt><dd id="checks-total">읽는 중</dd>
+        <dt>막음</dt><dd id="checks-blocked">읽는 중</dd>
+        <dt>실패</dt><dd id="checks-failed">읽는 중</dd>
+        <dt>미실행</dt><dd id="checks-notrun">읽는 중</dd>
+      </dl>
+      <p id="checks-meta" role="status">서버의 점검 결과를 읽는 중입니다.</p>
+      <p>41종 공격 전체는 심판이 보내며 이 저장소에서는 실행하지 않았습니다. 표에 없는 공격을 통과로 적지 않습니다.</p>
     </section>
     <div class="notice">로그인한 사람만 자기 메모를 볼 수 있습니다. 서버가 요청한 사람과 메모 주인을 매번 비교해서, 다른 사람의 메모는 목록에 나오지 않고 주소를 알아도 읽거나 고치거나 지울 수 없습니다.</div>
     <section class="panel" aria-label="로그인">
@@ -399,6 +413,29 @@
       await refreshDevice();
     });
     $('device-refresh').addEventListener('click', async () => { await refreshDevice(); loadNotes(); loadOps(); });
+
+    // 첫 화면의 점검 요약: 로그인·기기 승인과 무관하게 서버의 /api/checks를 읽어 네 숫자를 그대로 표시합니다.
+    // 응답이 없거나 합계가 맞지 않으면 숫자를 비우고 읽지 못함으로 표시합니다(이전 숫자를 남기지 않습니다).
+    async function loadPublicChecks() {
+      const ids = { total: 'checks-total', blocked: 'checks-blocked', failed: 'checks-failed', notRun: 'checks-notrun' };
+      const clear = text => {
+        for (const id of Object.values(ids)) $(id).textContent = '—';
+        $('checks-meta').textContent = text;
+      };
+      try {
+        const response = await fetch('/api/checks', { cache: 'no-store' });
+        const data = response.ok ? await response.json() : null;
+        const valid = data && Object.keys(ids).every(key => Number.isInteger(data[key]) && data[key] >= 0)
+          && data.total === data.blocked + data.failed + data.notRun
+          && Array.isArray(data.attempts) && data.attempts.length === data.total;
+        if (!valid) return clear('점검 결과를 읽지 못했습니다(응답이 없거나 합계가 맞지 않음).');
+        for (const [key, id] of Object.entries(ids)) $(id).textContent = String(data[key]);
+        $('checks-meta').textContent = `커밋 ${data.commit ?? '알 수 없음'} · 확인 시각 ${data.checkedAt} · 요청 ${data.requestsSent}건`;
+      } catch {
+        clear('점검 결과를 읽지 못했습니다.');
+      }
+    }
+    loadPublicChecks();
 
     session = readSession();
     renderDevice();

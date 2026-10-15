@@ -13,6 +13,7 @@
     "policy:diff": "node scripts/policy-diff.mjs",
     "policy:snapshot": "node scripts/policy-snapshot.mjs",
     "ops:verify": "node scripts/ops-verify.mjs",
+    "checks:table": "node scripts/checks-table.mjs",
     "policy:restore": "node scripts/policy-restore.mjs",
     "xdr:run": "node scripts/xdr-run.mjs",
     "xdr:test": "node --test test/brute-force.test.mjs test/web-injection.test.mjs test/xdr-run.test.mjs",

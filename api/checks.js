@@ -4,7 +4,8 @@
 //   ?view=ops        탈환 작전실 요약(로그인과 기기 승인이 필요)
 import config from '../aleph.config.json' with { type: 'json' };
 import { CASE_IDS, evaluateCase } from '../src/check-cases.mjs';
-import { classify, runChecks, summarize } from '../src/checks-core.mjs';
+import { classify, runChecks, stageOf, summarize } from '../src/checks-core.mjs';
+import { RULE_IDS } from '../src/decider.mjs';
 import { requireLogin } from '../src/memo-api.mjs';
 import { buildOpsSummary } from '../src/ops-summary.mjs';
 
@@ -44,12 +45,16 @@ export default async function handler(request, response) {
     checkedAt: cached.checkedAt,
     commit: (process.env.VERCEL_GIT_COMMIT_SHA ?? '').slice(0, 12) || null,
     step: config.step,
+    target: config.publicAppUrl,
+    rules: [...RULE_IDS],
+    recordSource: 'student_check_function',
+    sources: { student: ['src/checks-core.mjs', 'src/check-cases.mjs', 'src/decider.mjs', 'src/detect.mjs'], engine: 'ALEPH SDP 엔진', engineEnforced: 'not_run' },
     total: sum.total,
     blocked: sum.blocked,
     failed: sum.failed,
     notRun: sum.notRun,
     requestsSent: cached.requestsSent,
-    attempts: cached.attempts.map(item => ({ ...item, result: classify(item) })),
+    attempts: cached.attempts.map(item => ({ attackId: item.attackId, stage: stageOf(item.attackId), expected: item.expected, observed: item.observed, result: classify(item) })),
     note: '41종 공격 전체는 심판이 보내며 이 저장소에서는 실행하지 않았습니다. 표에 없는 공격을 통과로 적지 않습니다.',
   });
 }
