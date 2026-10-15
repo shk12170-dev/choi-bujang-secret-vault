@@ -825,3 +825,11 @@ npm run bundle                                                 # 제출 묶음(�
 | `npm run ops:verify`(로그인 계정 7건) | **미실행** | `ALEPH_TOKEN_A`·`ALEPH_B_MEMO_ID` 없음. A의 자기 목록·공지·작전실 허용과 B의 메모 조회·수정·삭제·복원 거부는 결과표에 미실행으로 남음 |
 | 작전실 화면(로그인한 계정) | **실행함(2026-10-15, 배포 커밋 `7c1f8ee08ceb`)** | 승인된 기기에서 로그인해 화면을 열고 SQL 기록과 대조: 승인 2·대기 0·거부 0·메모 사본 3·복원 감사 1이 화면과 일치. 판정기 5행·탐지 3행 모두 일치, 실제 회수와 41종은 미실행 표시, 메모 본문 없음. 학생이 캡처와 SQL 결과로 전달한 값을 기록한 것 |
 | 심판의 41종 공격 시험 | **미실행** | 이 저장소에 목록이 없어 실행하지 않았고 통과로 세지 않음 |
+
+### 제출 묶음은 읽기 요청만 보냅니다 (12단계 판정 S12_BUNDLE_UNSUPPORTED 보완)
+
+심판의 격리 환경은 `npm run bundle`이 GET·HEAD 외의 요청을 보내면 끝까지 실행하지 못합니다. 그래서 12단계 이상에서는 `src/attack-check.mjs`가 쓰기 요청(POST·PUT 등)을 보내지 않고, 쓰기 요청이 필요한 점검 3개(`auth_proxy_empty_login`, `anonymous_notice_write_by_id`, `anonymous_note_restore`)의 `observed`를 `not_run`으로 둡니다.
+
+- 이 3개의 거부 동작(비로그인 쓰기 요청이 401)은 `npm run ops:verify`가 배포 주소에 실제로 보낸 요청의 결과표에 남습니다(학생 PC에서 실행, 격리 환경 아님).
+- 번들은 `src/ops-probes.mjs`(판정기·탐지 가상 요청)와 `node:crypto`만 새로 쓰고 JSON 가져오기·파일 읽기를 하지 않습니다.
+- 회귀 시험: `test/bundle-read-only.test.mjs`가 점검 중 실제로 나간 요청 방식이 GET·HEAD뿐인지 확인합니다.

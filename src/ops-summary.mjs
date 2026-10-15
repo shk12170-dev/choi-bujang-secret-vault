@@ -5,74 +5,16 @@
 //   source 'unavailable' 읽으려 했지만 읽지 못한 값(표가 없거나 DB 오류). 값을 만들어 채우지 않습니다.
 //   source 'not_run'     이 저장소가 실행한 적이 없는 것(예: 실제 회수 시스템과의 연결, 심판의 41종 시험)
 // 메모 제목·본문은 읽지도 담지도 않습니다. 식별자는 앞 8자리까지만 보여 서버 기록과 대조할 수 있게 합니다.
-import { createHash, randomUUID } from 'node:crypto';
 import config from '../aleph.config.json' with { type: 'json' };
 import policySnapshot from '../backup/policy-snapshot.json' with { type: 'json' };
-import { RULE_IDS, decide } from './decider.mjs';
-import { DETECTION_POLICY, detect } from './detect.mjs';
+import { RULE_IDS } from './decider.mjs';
+import { DETECTION_POLICY } from './detect.mjs';
+import { deciderProbes, detectionProbes } from './ops-probes.mjs';
 import { RESOURCE_KINDS } from './resources.mjs';
 import { buildPolicy, previewRestore } from './policy-restore.mjs';
 
 const mask = value => (typeof value === 'string' && value.length >= 8 ? `${value.slice(0, 8)}…` : null);
 const count = (rows, key, value) => rows.filter(row => row[key] === value).length;
-
-// 판정기에 보내는 가상 요청(계약의 18개 이름). 실제 학생 값은 담지 않습니다.
-function virtualRequest(patch = {}) {
-  return {
-    schema: 'aleph.decision.v1', requestId: randomUUID(), classId: 'class_ops', projectId: 'project_ops',
-    subjectId: 'learner_ops', deviceId: 'a'.repeat(16), service: 'notes', method: 'GET',
-    path: `/api/notes/${randomUUID()}`, route: 'GET /api/notes/:id', queryLength: 0,
-    querySha256: createHash('sha256').update('').digest('hex'), at: new Date().toISOString(), policyRevision: 1,
-    deviceRegistered: true, stepUp: { verified: false, authAgeSeconds: null },
-    recentEvents: [], signals: { source: 'judge_fixture', region: 'local', network: 'usual', hour: 14 }, ...patch,
-  };
-}
-
-async function deciderProbes() {
-  const cases = [
-    { id: 'registered_memo_read', expected: 'allow', request: virtualRequest() },
-    { id: 'unregistered_device', expected: 'deny', request: virtualRequest({ deviceRegistered: false }) },
-    { id: 'memo_list', expected: 'deny', request: virtualRequest({ path: '/api/notes', route: 'GET /api/notes' }) },
-    { id: 'memo_write', expected: 'deny', request: virtualRequest({ method: 'PUT', route: 'PUT /api/notes/:id' }) },
-    {
-      id: 'compound_anomaly', expected: 'step_up',
-      request: virtualRequest({
-        signals: { source: 'judge_fixture', region: 'foreign', network: 'unusual', hour: 3 },
-        recentEvents: [{ kind: 'risk_signal', ageSeconds: 60, count: 20 }],
-      }),
-    },
-  ];
-  const probes = [];
-  for (const item of cases) {
-    let actual = null;
-    let shapeOk = false;
-    try {
-      const out = await decide(item.request);
-      actual = out?.decision ?? null;
-      shapeOk = Boolean(out) && out.requestId === item.request.requestId
-        && Object.keys(out).sort().join(',') === 'decision,reasonCode,requestId,ruleIds,schema'
-        && Array.isArray(out.ruleIds) && out.ruleIds.every(rule => RULE_IDS.includes(rule));
-    } catch { actual = 'error'; }
-    probes.push({ id: item.id, expected: item.expected, actual, shapeOk, matches: actual === item.expected && shapeOk, requestId: item.request.requestId });
-  }
-  return probes;
-}
-
-function detectionProbes() {
-  const start = Date.UTC(2026, 9, 1, 0, 0, 0);
-  const reads = (n, extra = {}) => Array.from({ length: n }, (_, i) => ({
-    at: new Date(start + i * 2000).toISOString(), method: 'GET', identity: { sub: 'learner_ops' }, ...extra,
-  }));
-  const cases = [
-    { id: 'normal_30_reads', expected: 'observe', events: reads(30) },
-    { id: 'usual_network_200_reads', expected: 'observe', events: reads(200, { network: 'usual' }) },
-    { id: 'compound_130_reads', expected: 'propose_revocation', events: reads(130, { network: 'unusual', deviceId: 'b'.repeat(16) }) },
-  ];
-  return cases.map(item => {
-    const result = detect(item.events);
-    return { id: item.id, expected: item.expected, actual: result.action, matches: result.action === item.expected };
-  });
-}
 
 // db 조회는 사용자 본인 행만 읽고 개수와 앞 8자리 식별자만 돌려줍니다.
 async function readOwn(db, table, columns, userId) {

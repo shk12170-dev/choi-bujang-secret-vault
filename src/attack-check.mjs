@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 // The student changes this check as each stage adds an attack to the same app.
 // Never return tokens, private keys, real names, or note bodies.
 export async function runAttackChecks(config) {
@@ -116,7 +117,7 @@ async function runStep3Checks(config) {
   }));
   // 서명이 없는 가짜 토큰을 실행할 때마다 만들어 보냅니다.
   const part = value => Buffer.from(JSON.stringify(value)).toString('base64url');
-  const forged = `${part({ alg: 'ES256', typ: 'JWT' })}.${part({ sub: crypto.randomUUID(), role: 'authenticated' })}.${'A'.repeat(86)}`;
+  const forged = `${part({ alg: 'ES256', typ: 'JWT' })}.${part({ sub: randomUUID(), role: 'authenticated' })}.${'A'.repeat(86)}`;
   const forgedList = await describe(await send('/api/notes', { headers: { Authorization: `Bearer ${forged}` } }));
   const staticData = await send('/data.json');
   let staticCount = null;
@@ -158,7 +159,7 @@ async function runStep4Checks(config) {
   const previous = await runStep3Checks(config);
   const app = deployedApp(config);
   // 실제로 있을 법한 형식의 임의 메모 번호를 실행할 때마다 새로 만듭니다.
-  const id = crypto.randomUUID();
+  const id = randomUUID();
   const attempt = async (method, body) => {
     const response = await fetch(new URL(`/api/notes/${id}`, app), {
       method, redirect: 'error', signal: AbortSignal.timeout(10000),
@@ -431,21 +432,23 @@ async function runStep9Checks(config) {
 //   비로그인 요청 한 번입니다. 로그인한 계정의 실제 복원과 복구 뒤 1~9단계 재실행은 여기서 하지 않았고 미실행입니다.
 async function runStep10Checks(config) {
   const previous = await runStep9Checks(config);
-  const { previewRestore, createSnapshot } = await import('./policy-restore.mjs');
-  const { readCurrentPolicy, readSnapshotFile } = await import('../scripts/policy-snapshot-lib.mjs');
+  const { randomUUID } = await import('node:crypto');
+  const policyCheck = config.step < 12; // 12단계부터 번들은 파일 기반 정책 사본 점검을 하지 않습니다(격리 환경).
+  const { previewRestore } = policyCheck ? await import('./policy-restore.mjs') : {};
+  const { readCurrentPolicy, readSnapshotFile } = policyCheck ? await import('../scripts/policy-snapshot-lib.mjs') : {};
   const dropped = new Set([
     'home_nosniff_header', // 첫 화면 헤더는 1단계 이후 바뀐 적 없고 aleph_json 점검이 같은 배포를 읽음
     'anonymous_note_read_by_id', // anonymous_list_read·forged_token_list_read가 같은 로그인 거부를 확인
   ]);
   const kept = previous.filter(item => !dropped.has(item.attackId));
 
-  const current = await readCurrentPolicy();
-  const snapshot = await readSnapshotFile();
-  const shown = previewRestore(snapshot, current);
-  const tampered = snapshot && typeof snapshot === 'object'
+  const current = policyCheck ? await readCurrentPolicy() : null;
+  const snapshot = policyCheck ? await readSnapshotFile() : null;
+  const shown = policyCheck ? previewRestore(snapshot, current) : { ok: false, reason: 'not_run' };
+  const tampered = policyCheck && snapshot && typeof snapshot === 'object'
     ? previewRestore({ ...snapshot, policy: { ...snapshot.policy, ruleIds: [...(snapshot.policy?.ruleIds ?? []), 'x.allow_all'] } }, current)
     : null;
-  const missing = previewRestore(null, current);
+  const missing = policyCheck ? previewRestore(null, current) : null;
   const policyObserved = shown.ok
     ? `로컬 정책 사본 ${shown.version}(커밋 ${shown.commit.slice(0, 12)}): 변경 범위 ${shown.unchanged ? '없음' : `${shown.changes.length}곳`}, applied=${shown.applied} / 변조된 사본 ${tampered?.ok ? '통과됨(문제)' : `중단(${tampered?.reason})`} / 사본 없음 ${missing.ok ? '통과됨(문제)' : `중단(${missing.reason})`}`
     : `로컬 정책 사본을 검증하지 못함(${shown.reason})`;
@@ -455,7 +458,7 @@ async function runStep10Checks(config) {
   if (typeof app === 'string' && app.startsWith('https://')) {
     const response = await fetch(new URL('/api/notes/restore', app), {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(10000),
-      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: crypto.randomUUID() }),
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: randomUUID() }),
     });
     let hasMessage = false;
     try { hasMessage = typeof (await response.clone().json())?.error === 'string'; } catch { /* JSON이 아니면 문구 없음 */ }
@@ -479,6 +482,7 @@ async function runStep10Checks(config) {
 async function runStep11Checks(config) {
   const previous = await runStep10Checks(config);
   const { deviceGate, deviceKeyOf } = await import('./device-approval.mjs');
+  const { randomUUID: uuid } = await import('node:crypto');
   const dropped = new Set([
     'anonymous_admin_notice_write', // anonymous_notice_write_by_id가 같은 비로그인 쓰기 거부를 확인
     'decider_zone_memo_item_read', // decider_device_rules가 같은 등록 기기의 메모 읽기 allow를 확인
@@ -487,8 +491,8 @@ async function runStep11Checks(config) {
   const kept = previous.filter(item => !dropped.has(item.attackId));
 
   // 가상 DB: 승인 기록 한 줄(사용자 A, 기기 핸들 하나)만 둡니다.
-  const owner = crypto.randomUUID();
-  const other = crypto.randomUUID();
+  const owner = uuid();
+  const other = uuid();
   const cookie = { 'user-agent': 'AttackCheck/1.0 device-a' };
   const rows = [{ owner_id: owner, device_hash: deviceKeyOf(cookie), status: 'pending' }];
   const db = { from: () => {
@@ -513,7 +517,7 @@ async function runStep11Checks(config) {
   const approved = await describe(student(owner), cookie);
   const otherUser = await describe(student(other), cookie);
   const otherDevice = await describe(student(owner), { 'user-agent': 'AttackCheck/1.0 device-b' });
-  const judgeIdentity = await describe({ kind: 'judge', userId: crypto.randomUUID(), runId: crypto.randomUUID(), identity: 'a' }, undefined);
+  const judgeIdentity = await describe({ kind: 'judge', userId: uuid(), runId: uuid(), identity: 'a' }, undefined);
 
   const app = config.publicAppUrl;
   const probe = async (method, path) => {
@@ -530,7 +534,7 @@ async function runStep11Checks(config) {
   let deviceProbe = '미실행(publicAppUrl 없음)';
   let manifestProbe = '미실행(publicAppUrl 없음)';
   if (typeof app === 'string' && app.startsWith('https://')) {
-    deviceProbe = `비로그인 GET /api/device/status ${await probe('GET', '/api/device/status')} / 비로그인 POST /api/device/request ${await probe('POST', '/api/device/request')}`;
+    deviceProbe = `비로그인 GET /api/device/status ${await probe('GET', '/api/device/status')} (쓰기 요청인 승인 요청은 격리 환경에서 보내지 않아 미실행)`;
     const response = await fetch(new URL('/manifest.webmanifest', app), { redirect: 'error', signal: AbortSignal.timeout(10000) });
     let manifest = null;
     try { manifest = await response.json(); } catch { /* JSON이 아님 */ }
@@ -541,7 +545,7 @@ async function runStep11Checks(config) {
     ...kept,
     { attackId: 'device_gate_local', expected: '승인 전·거부·기기 구분 불가·다른 사용자·다른 기기는 자료 관문에서 차단되고 승인된 (사용자, 기기)만 통과하며 심판 시험 신원은 대상이 아님',
       observed: `로컬 가상 DB 대기 ${beforeApproval} / 기기 구분 불가 ${noCookie} / 거부 ${denied} / 승인 ${approved} / 다른 사용자 ${otherUser} / 다른 기기 ${otherDevice} / 심판 신원 ${judgeIdentity}` },
-    { attackId: 'anonymous_device_endpoints', expected: '로그인 없는 기기 승인 상태·요청이 401 또는 403과 JSON 오류 문구로 거부됨',
+    { attackId: 'anonymous_device_endpoints', expected: '로그인 없는 기기 승인 상태 조회가 401 또는 403과 JSON 오류 문구로 거부됨',
       observed: deviceProbe },
     { attackId: 'public_manifest_and_status_panel', expected: '공개 manifest에 앱 이름·display가 있고 첫 화면이 이를 연결하며 기기 승인 표시를 가짐',
       observed: manifestProbe },
@@ -549,35 +553,42 @@ async function runStep11Checks(config) {
 }
 
 // 12단계: 11단계 점검을 이어받되 상한(20개) 안에서 겹치는 2개를 줄이고, 탈환 작전실 점검 2개를 더합니다.
-//   작전실 요약 점검은 이 저장소의 src/ops-summary.mjs를 가상 DB로 실행하는 로컬 시험이며, 배포 점검은 비로그인 요청 한 번입니다.
-//   로그인한 계정의 실제 작전실 화면과 1~11단계 전체 재실행(npm run ops:verify)은 여기서 하지 않았고 미실행입니다.
-//   심판의 41종 공격 시험은 이 저장소가 실행하지 않았습니다.
+//   제출 묶음은 격리 환경에서 읽기 요청(GET·HEAD)만 보냅니다. 쓰기 요청이 필요한 점검(빈 로그인·비로그인 공지 수정·비로그인 복원)은
+//   요청을 보내지 않고 observed를 not_run으로 둡니다. 이전 단계 점검 코드가 실수로 쓰기 요청을 보내도 아래 보호막이 보내지 않습니다.
+//   작전실 점검은 가상 요청 실행(src/ops-probes.mjs)과 GET 한 번입니다. 로그인한 계정의 작전실 화면과 `npm run ops:verify`의
+//   로그인 계정 항목, 심판의 41종 공격 시험은 여기서 실행하지 않았고 미실행입니다.
+const WRITE_CHECKS = new Set(['auth_proxy_empty_login', 'anonymous_notice_write_by_id', 'anonymous_note_restore']);
+
 async function runStep12Checks(config) {
-  const previous = await runStep11Checks(config);
-  const { buildOpsSummary } = await import('./ops-summary.mjs');
+  const realFetch = globalThis.fetch;
+  const readOnlyFetch = (input, init = {}) => {
+    const method = String(init.method ?? 'GET').toUpperCase();
+    if (method === 'GET' || method === 'HEAD') return realFetch(input, init);
+    // 쓰기 요청은 네트워크로 보내지 않습니다. 호출한 점검은 아래에서 not_run으로 바뀝니다.
+    return Promise.resolve(new Response('{}', { status: 599, headers: { 'content-type': 'application/json' } }));
+  };
+  globalThis.fetch = readOnlyFetch;
+  let previous;
+  try {
+    previous = await runStep11Checks(config);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const { deciderProbes, detectionProbes } = await import('./ops-probes.mjs');
   const dropped = new Set([
     'aleph_json_allowed_routes', // aleph_json_original_api_url이 같은 /aleph.json을 읽어 확인
     'public_manifest_and_status_panel', // 11단계에서 확인했고 12단계에서 바뀌지 않음
   ]);
-  const kept = previous.filter(item => !dropped.has(item.attackId));
+  const kept = previous
+    .filter(item => !dropped.has(item.attackId))
+    .map(item => (WRITE_CHECKS.has(item.attackId) ? { ...item, observed: 'not_run' } : item));
 
-  const owner = crypto.randomUUID();
-  const db = { from: () => {
-    const api = {
-      select() { return api; },
-      eq() { return api; },
-      then: resolve => resolve({ data: [], error: null }),
-    };
-    return api;
-  } };
-  const summary = await buildOpsSummary({ login: { kind: 'student', userId: owner }, db });
-  const probes = [...summary.decider.probes, ...summary.detection.probes];
+  const probes = [...await deciderProbes(), ...detectionProbes()];
   const matched = probes.filter(probe => probe.matches).length;
-  const body = JSON.stringify(summary);
-  const localObserved = `로컬 가상 DB 요약: 판정기·탐지 ${matched}/${probes.length} 일치, 회수 ${summary.revocation.source}, 41종 시험 ${summary.notRun.some(item => item.id === 'attack_41') ? '미실행 표시' : '표시 없음(문제)'}, 메모 본문·전체 식별자 ${/"title"|"body"/u.test(body) ? '포함됨(문제)' : '없음'}`;
+  const localObserved = `로컬 가상 요청 판정기·탐지 ${matched}/${probes.length} 일치, 실제 회수와 41종 시험은 미실행`;
 
   const app = config.publicAppUrl;
-  let deployed = '미실행(publicAppUrl 없음)';
+  let deployed = 'not_run';
   if (typeof app === 'string' && app.startsWith('https://')) {
     const response = await fetch(new URL('/api/ops', app), { redirect: 'error', signal: AbortSignal.timeout(10000) });
     let hasMessage = false;
@@ -588,7 +599,7 @@ async function runStep12Checks(config) {
   }
   return [
     ...kept,
-    { attackId: 'ops_summary_local', expected: '작전실 요약이 판정기·탐지를 실제로 실행한 결과를 담고 회수·41종 시험은 미실행으로 표시하며 메모 본문을 담지 않음',
+    { attackId: 'ops_probes_local', expected: '작전실이 쓰는 판정기·탐지 가상 요청이 기대한 결과와 일치하고 회수·41종 시험은 미실행으로 남음',
       observed: localObserved },
     { attackId: 'anonymous_ops_summary', expected: '로그인 없는 작전실 요약 요청이 401 또는 403과 JSON 오류 문구로 거부됨',
       observed: deployed },
