@@ -5,7 +5,7 @@
 //   - 점검(attackId) 하나에 요청은 한 건만 보냅니다. 요청 방식은 GET만이고 전체 24건을 넘지 않습니다(코드로 강제).
 //   - observed에는 HTTP 상태와 key=value 사실만 적습니다(예: `HTTP 401`, `HTTP 200; jsonReady=true`). 설명은 expected에 둡니다.
 //   - 쓰기 요청이 필요한 점검은 보내지 않고 observed를 not_run으로 둡니다.
-//   - 쓰는 모듈은 node:crypto뿐이며 Buffer·Response 같은 전역에 기대지 않습니다(격리 환경).
+//   - 쓰는 모듈은 node:crypto뿐이며 Buffer·Response 같은 전역에 기대지 않고, 응답은 status와 json()만 읽습니다(격리 환경).
 import { randomUUID } from 'node:crypto';
 
 export const MAX_REQUESTS = 24;
@@ -53,45 +53,44 @@ export const CHECKS = Object.freeze([
   { id: 's12-ops-unauth', stage: 12, kind: 'deny', path: '/api/checks?view=ops', expected: 'HTTP 401 또는 403' },
 ]);
 
-function readJsonFacts(response, text) {
-  let body = null;
-  const type = response.headers?.get?.('content-type') ?? '';
-  if (type.includes('json')) { try { body = JSON.parse(text); } catch { body = null; } }
-  return body;
-}
-
 // 점검 하나를 보냅니다. 반환: { attackId, expected, observed }
+//   격리 환경의 요청 기록기는 이전 단계 점검과 같은 모양의 요청(URL 객체, redirect: 'error', AbortSignal.timeout)과
+//   응답의 status·json()만 확실히 지원하므로 그 범위 안에서만 씁니다. 응답을 받지 못한 요청은 not_run으로 남깁니다.
 export async function runOne(def, { baseUrl, originalApiUrl, fetchImpl, state }) {
   const base = { attackId: def.id, expected: def.expected };
   if (def.kind === 'not_run') return { ...base, observed: 'not_run' };
 
-  let url;
-  if (def.absolute) {
-    url = def.absolute === 'originalApiUrl' ? originalApiUrl : null;
-    if (typeof url !== 'string' || !url.startsWith('https://')) return { ...base, observed: 'not_run' };
-  } else {
-    const path = typeof def.path === 'function' ? def.path({ uuid: state.uuid }) : def.path;
-    url = new URL(path, baseUrl).href;
+  let target;
+  try {
+    if (def.absolute) {
+      if (def.absolute !== 'originalApiUrl' || typeof originalApiUrl !== 'string' || !originalApiUrl.startsWith('https://')) {
+        return { ...base, observed: 'not_run' };
+      }
+      target = new URL(originalApiUrl);
+    } else if (def.kind === 'case') {
+      target = new URL(`/api/checks?case=${def.case}`, baseUrl);
+    } else {
+      target = new URL(typeof def.path === 'function' ? def.path({ uuid: state.uuid }) : def.path, baseUrl);
+    }
+  } catch {
+    return { ...base, observed: 'not_run' };
   }
-  if (def.kind === 'case') url = new URL(`/api/checks?case=${def.case}`, baseUrl).href;
-
-  const method = 'GET';
-  if (!READ_ONLY_METHODS.has(method)) return { ...base, observed: 'not_run' };
   if (state.sent >= MAX_REQUESTS) return { ...base, observed: 'not_run' };
   state.sent += 1;
 
-  const headers = { Accept: 'application/json' };
-  if (def.forged) headers.Authorization = `Bearer ${state.forgedToken}`;
+  const init = { redirect: 'error', signal: AbortSignal.timeout(10000) };
+  if (def.forged) init.headers = { Authorization: `Bearer ${state.forgedToken}` };
   let response;
-  let text = '';
   try {
-    response = await fetchImpl(url, { method, headers, redirect: 'manual', signal: AbortSignal.timeout(10000) });
-    text = await response.text();
+    response = await fetchImpl(target, init);
   } catch {
-    return { ...base, observed: 'HTTP 0' };
+    return { ...base, observed: 'not_run' }; // 응답을 받지 못한 요청은 결과를 적지 않습니다.
   }
   const status = response.status;
-  const body = readJsonFacts(response, text);
+  if (!Number.isInteger(status)) return { ...base, observed: 'not_run' };
+  let body = null;
+  try { body = await response.json(); } catch { body = null; } // JSON이 아니면 사실 값은 false로 둡니다.
+
   if (def.kind === 'static') return { ...base, observed: `HTTP ${status}; notesEmpty=${Array.isArray(body?.notes) && body.notes.length === 0}` };
   if (def.kind === 'aleph') {
     const ready = Boolean(body) && Array.isArray(body.allowedRoutes) && typeof body.originalApiUrl === 'string' && body.originalApiUrl.startsWith('https://');
@@ -121,9 +120,17 @@ export function summarize(attempts) {
 }
 
 // 점검을 모두 실행합니다. 서버(/api/checks)와 제출 묶음이 같은 함수를 부릅니다.
-export async function runChecks({ baseUrl, originalApiUrl = null, fetchImpl = globalThis.fetch }) {
+//   제출 묶음은 요청 순서가 기록과 같도록 차례대로 보내고(기본), 서버는 응답 시간을 줄이려고 parallel: true로 한꺼번에 보냅니다.
+export async function runChecks({ baseUrl, originalApiUrl = null, fetchImpl = globalThis.fetch, parallel = false }) {
   const forgedToken = `${base64urlAscii('{"alg":"ES256","typ":"JWT"}')}.${base64urlAscii(`{"sub":"${randomUUID()}","role":"authenticated"}`)}.${'A'.repeat(86)}`;
   const state = { sent: 0, uuid: randomUUID(), forgedToken };
-  const attempts = await Promise.all(CHECKS.map(def => runOne(def, { baseUrl, originalApiUrl, fetchImpl, state })));
+  const context = { baseUrl, originalApiUrl, fetchImpl, state };
+  let attempts;
+  if (parallel) {
+    attempts = await Promise.all(CHECKS.map(def => runOne(def, context)));
+  } else {
+    attempts = [];
+    for (const def of CHECKS) attempts.push(await runOne(def, context));
+  }
   return { attempts, requestsSent: state.sent };
 }

@@ -12,7 +12,7 @@ test('npm run bundle의 점검은 12단계 이상에서 GET만 24건 이하로 �
   const sent = [];
   const plain = status => ({
     status, headers: { get: () => 'application/json' },
-    text: async () => JSON.stringify({ notes: [], allowedRoutes: ['GET /api/notes/:id'], originalApiUrl: config.originalApiUrl, jsonReady: true }),
+    json: async () => ({ notes: [], allowedRoutes: ['GET /api/notes/:id'], originalApiUrl: config.originalApiUrl, jsonReady: true }),
   });
   globalThis.fetch = async (url, init = {}) => {
     sent.push(String(init.method ?? 'GET').toUpperCase());

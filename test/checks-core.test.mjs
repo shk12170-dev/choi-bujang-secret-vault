@@ -8,12 +8,15 @@ const BASE = 'https://app.example.invalid';
 const ORIGINAL = 'https://db.example.invalid/rest/v1/user_notes';
 
 // 응답은 읽는 항목(status·headers.get·text)만 가진 일반 객체로 흉내 낸다(격리 환경에는 Response 전역이 없다).
-const reply = (status, body, type = 'application/json') => ({
-  status, headers: { get: name => (name.toLowerCase() === 'content-type' ? type : null) }, text: async () => JSON.stringify(body),
+const reply = (status, body) => ({
+  status, headers: { get: () => 'application/json' }, json: async () => body,
 });
 
 function routeFetch(log) {
   return async (url, init = {}) => {
+    assert.ok(url instanceof URL, '요청 주소는 URL 객체여야 한다');
+    assert.equal(init.redirect, 'error');
+    assert.ok(init.signal);
     log.push({ url: String(url), method: String(init.method ?? 'GET').toUpperCase(), headers: init.headers ?? {} });
     const parsed = new URL(url);
     if (parsed.hostname === 'db.example.invalid') return reply(401, { message: 'No API key' });
@@ -37,6 +40,13 @@ test('점검은 20건 이하이고 GET만 24건 이하로 보내며 점검마다
   const notRun = attempts.filter(item => item.observed === 'not_run').map(item => item.attackId).sort();
   assert.deepEqual(notRun, ['s10-restore-unauth', 's11-notice-write']);
   assert.equal(log.length, CHECKS.length - notRun.length); // 점검당 한 건
+});
+
+test('응답을 받지 못한 요청은 결과를 적지 않고 not_run으로 남긴다', async () => {
+  const failing = async () => { throw new TypeError('network'); };
+  const { attempts } = await runChecks({ baseUrl: BASE, originalApiUrl: ORIGINAL, fetchImpl: failing });
+  assert.ok(attempts.every(item => item.observed === 'not_run'));
+  assert.deepEqual(summarize(attempts), { total: 20, blocked: 0, failed: 0, notRun: 20 });
 });
 
 test('observed에는 HTTP 상태와 key=value 사실만 있고 설명 문장이 없다', async () => {

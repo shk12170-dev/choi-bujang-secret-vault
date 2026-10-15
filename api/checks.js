@@ -36,7 +36,7 @@ export default async function handler(request, response) {
   const now = Date.now();
   if (!cached || now - cached.at > CACHE_MS) {
     const baseUrl = config.publicAppUrl;
-    const { attempts, requestsSent } = await runChecks({ baseUrl, originalApiUrl: config.originalApiUrl });
+    const { attempts, requestsSent } = await runChecks({ baseUrl, originalApiUrl: config.originalApiUrl, parallel: true });
     cached = { at: now, checkedAt: new Date(now).toISOString(), attempts, requestsSent };
   }
   const sum = summarize(cached.attempts);

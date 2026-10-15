@@ -838,4 +838,5 @@ npm run bundle                                                 # 제출 묶음(�
 - 제출 묶음의 `attackAttempts`, 서버의 `GET /api/checks`, 작전실 화면의 수치는 모두 `src/checks-core.mjs`의 같은 점검 목록과 같은 함수에서 나옵니다. 화면 수치를 따로 계산하지 않습니다.
 - 점검 하나에 GET 요청 한 건, 전체 24건 이하이며 코드로 강제합니다. `observed`에는 `HTTP 401`, `HTTP 200; jsonReady=true`처럼 상태와 사실만 적고 설명은 `expected`에 둡니다.
 - 쓰기 요청이 필요한 점검(복원 POST, 공지 수정 PUT)은 보내지 않고 `not_run`으로 둡니다.
+- 요청은 이전 단계 점검과 같은 모양(URL 객체, `redirect: 'error'`, `AbortSignal.timeout`)으로 차례대로 보내고, 응답은 `status`와 `json()`만 읽습니다. 응답을 받지 못한 요청은 결과를 적지 않고 `not_run`으로 남깁니다.
 - 번들 점검 경로는 `node:crypto`만 쓰며 `Buffer`·`Response` 전역에 기대지 않습니다(`test/bundle-read-only.test.mjs`, `test/checks-core.test.mjs`).
