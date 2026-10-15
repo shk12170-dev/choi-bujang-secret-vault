@@ -248,9 +248,9 @@ Wazuh 형식의 공식 연습 경보(`xdr/fixtures/brute-force.json`, 28건, SHA
 ### 실행과 실제 결과
 
 ```bash
-npm run xdr:test                 # XDR 시험 24개(XDR-01 11개, XDR-02 10개, 실행기 3개)
+npm run xdr:test                 # XDR 시험 36개(XDR-01·02·03 각 11개, 실행기 3개)
 npm run xdr:run -- brute-force   # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
-npm run xdr:replay               # 두 모듈 모의 overlay 재생
+npm run xdr:replay               # 모듈별 모의 overlay 재생
 node xdr/brute-force/respond.mjs # 거부 후보·알림 로그 생성
 ```
 
@@ -301,7 +301,7 @@ Wazuh 형식의 공식 연습 경보(`xdr/fixtures/web-injection.json`, 26건, S
 
 ```bash
 npm run xdr:run -- web-injection   # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
-npm run xdr:replay                 # 두 모듈 모의 overlay 재생
+npm run xdr:replay                 # 모듈별 모의 overlay 재생
 node xdr/web-injection/respond.mjs # 거부 후보·알림 로그 생성
 ```
 
@@ -315,6 +315,54 @@ node xdr/web-injection/respond.mjs # 거부 후보·알림 로그 생성
 - **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
 - **ZTNA 판정기:** XDR-01과 같습니다. `src/decider.mjs`는 시작 틀 상태이고 요청 계약에 검증된 출발 IP가 없어 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 추가 거부는 모의 재생에서만 검증했고 실제 접속 허용·회수로 보고하지 않습니다.
 - 공식 경보의 요청 주소는 문서용 표기라 센서 설명과 반복 집계를 함께 읽습니다. 실제 구문 형태(인코딩된 script 태그, `../` 반복, union select 등)는 시험의 변형 사례로만 확인했습니다. 다른 경보 묶음에서는 오분류가 있을 수 있으며, 로컬 시험 통과는 심판 통과가 아닙니다.
+
+## 보너스 xdr-03: 알려진 취약점 악용 탐지
+
+Wazuh 형식의 공식 연습 경보(`xdr/fixtures/known-cve.json`, 24건, SHA256 `A33753E7…4327D0`)에서 CVE-2021-44228(Log4Shell) 형태의 요청을 가려 행동을 정합니다. 경보 원본은 고치지 않습니다. 공식 경보의 원격 조회 구문은 **문서용 표기**이므로 문자열로만 검사하며, 다른 시스템에 넣거나 변형하거나 실행하지 않고 이유·알림 로그·거부 규칙에도 원문을 남기지 않습니다.
+
+### 구성
+
+| 파일 | 역할 |
+|---|---|
+| `xdr/known-cve/read-alerts.mjs` | 확인용 읽기 모듈(공통 구현 `xdr/read-alerts.mjs`). 시각·출발 주소·계정·규칙 수준·설명만 뽑고 **요청 머리글·주소 원문은 내보내지 않습니다.** `decide.mjs`는 이 파일을 부르지 않습니다. |
+| `xdr/known-cve/patterns.json` | 공격 형태 세 개(이름·찾는 조건·근거 한 줄·출처)와 일부러 막지 않는 정상·애매한 사례. 근거는 CVE-2021-44228, MITRE ATT&CK T1190(점검 도구 흔적은 T1595.002) |
+| `xdr/known-cve/decide.mjs` | 제출용 판단 모듈. `decide(alert)` 하나만 내보내며 **`import`가 없는 단일 ES 모듈**이고 파일·네트워크·시계를 쓰지 않습니다. 패턴의 이름·조건·근거는 파일 맨 위 상수로 옮겨 적었습니다. |
+| `xdr/known-cve/respond.mjs` | `block`만 15분 만료·근거 경보 번호가 있는 추가 거부 후보로 `xdr/deny-rules.json`에 넣고(XDR-01·02 규칙 보존), 알림을 `xdr/alerts.log`에 계정·요청 원문 없이 쌓습니다. |
+| `xdr/known-cve/result.json` | `npm run xdr:run -- known-cve` 결과(`aleph.xdr.result.v1`) |
+| `test/known-cve.test.mjs` | 읽기·분류·단어 하나로 막지 않음·인코딩과 쪼갠 변형·독립 실행·이유에 원문 없음·차단 후보·세 모듈 겹침과 만료 시험 |
+
+### 패턴과 판단 기준 (학습용 기준값, 보편 임계값 아님)
+
+| 패턴 | 찾는 구조 | 차단(block) 조건 |
+|---|---|---|
+| `jndi-lookup-expression` | 요청 머리글이나 주소 인자에 `${jndi:프로토콜://대상}` 형태의 **완전한** 조회 구문(최대 두 번 디코딩, lower·upper·기본값 표기로 쪼갠 변형 포함) | 구문 + 경보 수준 10 이상 |
+| `repeated-lookup-probe` | 같은 주소에서 완전한 구문이 3번 이상 반복 | 반복 + 수준 10 이상(확신도를 높임) |
+| `known-vuln-scanner-trace` | 점검 도구 흔적(`probe` 표식, 알려진 점검 도구 이름, 센서의 점검 흔적 표기) | 단독이면 알림, 완전한 구문과 함께일 때만 차단에 가세 |
+
+- 확신도: 구문 + 수준 10 이상이 0.90에서 시작하고 머리글·주소 양쪽(+0.03), 반복 3번 이상(+0.03), 점검 도구 흔적(+0.02), 수준 12 이상(+0.01)으로 올라 0.97이 상한입니다. 구문은 있으나 수준이 낮으면 0.70(알림)입니다.
+- 알림(alert): CVE 번호를 글자로만 검색, `jndi`라는 수업 단어, 중괄호 한 번, 취약점 목록 문서 조회, 점검 도구와 비슷한 수업용 프로그램 이름, 라이브러리 이름, 잘린 조각처럼 **완전한 구문이 없는** 애매한 사례(0.55~0.60)
+- 기록(record): 구조가 없고 수준 4 이하인 정상 조회(0.10)
+- 출발 주소·계정 칸의 값은 요청 근거로 보지 않고, 센서 설명의 부정 문장("구문은 없습니다")과 수업·비슷한 표현은 위협 근거에서 뺍니다. 단어·수준·태그·주소·경보 번호·순서 하나만으로는 막지 않고, 저장된 `result.json`을 정답으로 읽지 않습니다.
+- 모든 판단의 `reason`에는 근거 패턴 이름(과 id·기법)이 한 줄로 들어 있습니다.
+
+### 실행과 실제 결과
+
+```bash
+npm run xdr:run -- known-cve      # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
+npm run xdr:replay                # 세 모듈 모의 overlay 재생
+node xdr/known-cve/respond.mjs    # 거부 후보·알림 로그 생성
+npm run xdr:test                  # XDR 시험 36개
+```
+
+- 분류: **block 8 · alert 8 · record 8** (총 24건). 명확한 공격 `kc-01`~`kc-08`(완전한 조회 구문 + 수준 10~13)은 `block`, 애매한 시도 `kc-09`~`kc-16`(글자·단어·조각뿐인 사례)은 `alert`, 정상 이벤트 `kc-17`~`kc-24`는 `record`입니다. **정상·애매한 이벤트를 막은 경우는 없습니다.** 이 구분은 경보 설명·요청 구조·수준으로 판단한 것이며 저장소에 정답표는 없습니다.
+- 세 모듈 모의 overlay: **attackDenied 26(XDR-01 10 + XDR-02 8 + XDR-03 8), normalDenied 0, ambiguousDenied 0, expiredDenied 0**. 세 모듈이 함께 막는 주소 `203.0.113.10`은 마지막 규칙이 끝나야 기존 판정으로 돌아갑니다.
+- 독립 실행: `decide.mjs` 파일 하나를 `data:` URL로 불러와도 24건 결과가 같습니다.
+
+### 연결 범위와 한계
+
+- **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
+- **ZTNA 판정기:** `src/decider.mjs`는 6~12단계 규칙(`device_registered`, `step_up_required`, `zone_access`)을 갖고 있지만 요청 계약(`docs/DECIDER_REQUEST.md`)에는 검증된 출발 IP가 없습니다. 그래서 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 출발 IP를 사용자가 보낸 값·헤더에서 가져와 막지 않으며, 추가 거부는 `applyDenyOverlay()`를 모의 재생에서만 검증했고 실제 접속 허용·회수로 보고하지 않습니다.
+- 공식 경보의 조회 구문은 문서용 표기입니다. 인코딩·`${lower:j}`·`${::-j}`로 쪼갠 변형은 시험의 변형 사례로만 확인했고, 다른 경보 묶음이나 다른 취약점(CVE) 형태에서는 오분류가 있을 수 있습니다. 로컬 시험 통과는 심판 통과가 아니며 판정은 심판이 다시 실행해 확인합니다.
 
 ## 6단계: 등록한 기기만 자료실에 들어옴
 

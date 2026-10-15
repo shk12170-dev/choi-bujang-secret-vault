@@ -5,10 +5,11 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as bruteForce from '../xdr/brute-force/respond.mjs';
+import * as knownCve from '../xdr/known-cve/respond.mjs';
 import * as webInjection from '../xdr/web-injection/respond.mjs';
 import { applyDenyOverlay } from '../xdr/ztna-overlay.mjs';
 
-export const MODULES = Object.freeze([bruteForce, webInjection]);
+export const MODULES = Object.freeze([bruteForce, webInjection, knownCve]);
 const MOCK_BASE = Object.freeze({ schema: 'aleph.decision.v1', decision: 'allow', reasonCode: 'mock_base_allow', ruleIds: ['mock.base'] });
 
 // inputs: [{ module: respond.mjs 모듈, alerts: 경보 배열 }]
