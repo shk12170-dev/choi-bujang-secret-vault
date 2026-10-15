@@ -28,11 +28,11 @@ export function buildCases(config, { foreignMemoId = UUID_PLACEHOLDER } = {}) {
     { stage: '11', id: 'device_status_without_login', kind: 'forbidden', method: 'GET', path: '/api/device/status', auth: 'none', expect: [401, 403], note: '비로그인 기기 상태 거부' },
     { stage: '11', id: 'device_request_without_login', kind: 'forbidden', method: 'POST', path: '/api/device/request', auth: 'none', body: {}, expect: [401, 403], note: '비로그인 기기 승인 요청 거부' },
     { stage: '11', id: 'manifest_public', kind: 'normal', method: 'GET', path: '/manifest.webmanifest', auth: 'none', expect: [200], note: '앱 설정 공개', check: body => typeof body?.name === 'string' },
-    { stage: '12', id: 'ops_without_login', kind: 'forbidden', method: 'GET', path: '/api/ops', auth: 'none', expect: [401, 403], note: '비로그인 작전실 요약 거부' },
+    { stage: '12', id: 'ops_without_login', kind: 'forbidden', method: 'GET', path: '/api/checks?view=ops', auth: 'none', expect: [401, 403], note: '비로그인 작전실 요약 거부' },
     // 로그인한 시험 계정(학생이 토큰을 환경변수로 넣은 경우에만 실행)
     { stage: '4', id: 'a_list_own', kind: 'normal', method: 'GET', path: '/api/notes', auth: 'A', expect: [200], needs: ['ALEPH_TOKEN_A'], note: 'A의 자기 목록 허용(승인된 기기)', check: body => Array.isArray(body) },
     { stage: '8', id: 'a_notices_read', kind: 'normal', method: 'GET', path: '/api/notices', auth: 'A', expect: [200], needs: ['ALEPH_TOKEN_A'], note: 'A의 공지 읽기 허용' },
-    { stage: '12', id: 'a_ops_summary', kind: 'normal', method: 'GET', path: '/api/ops', auth: 'A', expect: [200], needs: ['ALEPH_TOKEN_A'], note: 'A의 작전실 요약 허용' },
+    { stage: '12', id: 'a_ops_summary', kind: 'normal', method: 'GET', path: '/api/checks?view=ops', auth: 'A', expect: [200], needs: ['ALEPH_TOKEN_A'], note: 'A의 작전실 요약 허용' },
     { stage: '4', id: 'a_read_foreign', kind: 'forbidden', method: 'GET', path: `/api/notes/${foreignMemoId}`, auth: 'A', expect: [404], needs: ['ALEPH_TOKEN_A', 'ALEPH_B_MEMO_ID'], note: 'A가 B의 메모 조회 거부' },
     { stage: '4', id: 'a_update_foreign', kind: 'forbidden', method: 'PUT', path: `/api/notes/${foreignMemoId}`, auth: 'A', body: { title: 'x' }, expect: [404], needs: ['ALEPH_TOKEN_A', 'ALEPH_B_MEMO_ID'], note: 'A가 B의 메모 수정 거부' },
     { stage: '4', id: 'a_delete_foreign', kind: 'forbidden', method: 'DELETE', path: `/api/notes/${foreignMemoId}`, auth: 'A', expect: [404], needs: ['ALEPH_TOKEN_A', 'ALEPH_B_MEMO_ID'], note: 'A가 B의 메모 삭제 거부' },

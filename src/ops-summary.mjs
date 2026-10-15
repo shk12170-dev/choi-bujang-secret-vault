@@ -79,8 +79,6 @@ export async function buildOpsSummary({ login, db, now = new Date(), commit = nu
       backups: { source: backups.source, count: backups.rows.length, ids: backups.rows.map(row => mask(row.id)).filter(Boolean) },
       restoreAudit: { source: audit.source, count: audit.rows.length, lastRestoreAt: lastRestore },
     },
-    notRun: [
-      { id: 'attack_41', note: '심판의 41종 공격 시험은 이 저장소가 실행하지 않았습니다. 통과로 표시하지 않습니다.' },
-    ],
+    note: '41종 공격 전체는 심판이 보내며 이 저장소에서는 실행하지 않았습니다. 표에 없는 공격을 통과로 적지 않습니다.',
   };
 }

@@ -1,3 +1,4 @@
+import { base64urlAscii } from './checks-core.mjs';
 import { randomUUID } from 'node:crypto';
 // The student changes this check as each stage adds an attack to the same app.
 // Never return tokens, private keys, real names, or note bodies.
@@ -116,7 +117,7 @@ async function runStep3Checks(config) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'check', body: 'check' }),
   }));
   // 서명이 없는 가짜 토큰을 실행할 때마다 만들어 보냅니다.
-  const part = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const part = value => base64urlAscii(JSON.stringify(value));
   const forged = `${part({ alg: 'ES256', typ: 'JWT' })}.${part({ sub: randomUUID(), role: 'authenticated' })}.${'A'.repeat(86)}`;
   const forgedList = await describe(await send('/api/notes', { headers: { Authorization: `Bearer ${forged}` } }));
   const staticData = await send('/data.json');
@@ -552,61 +553,12 @@ async function runStep11Checks(config) {
   ];
 }
 
-// 12단계: 11단계 점검을 이어받되 상한(20개) 안에서 겹치는 2개를 줄이고, 탈환 작전실 점검 2개를 더합니다.
-//   제출 묶음은 격리 환경에서 읽기 요청(GET·HEAD)만 보냅니다. 쓰기 요청이 필요한 점검(빈 로그인·비로그인 공지 수정·비로그인 복원)은
-//   요청을 보내지 않고 observed를 not_run으로 둡니다. 이전 단계 점검 코드가 실수로 쓰기 요청을 보내도 아래 보호막이 보내지 않습니다.
-//   작전실 점검은 가상 요청 실행(src/ops-probes.mjs)과 GET 한 번입니다. 로그인한 계정의 작전실 화면과 `npm run ops:verify`의
-//   로그인 계정 항목, 심판의 41종 공격 시험은 여기서 실행하지 않았고 미실행입니다.
-const WRITE_CHECKS = new Set(['auth_proxy_empty_login', 'anonymous_notice_write_by_id', 'anonymous_note_restore']);
-
+// 12단계: 제출 묶음과 서버의 GET /api/checks가 같은 함수(src/checks-core.mjs)와 같은 점검 목록을 씁니다.
+//   점검 하나에 GET 요청 한 건, observed에는 HTTP 상태와 key=value 사실만 적고, 쓰기 요청이 필요한 점검은 보내지 않고 not_run입니다.
+//   격리 환경에서 쓸 수 있는 모듈은 node:crypto뿐이며(Buffer·Response 전역 없음) 요청은 공개 주소로 가는 GET만 보냅니다.
+//   41종 공격 전체는 심판이 보내며 이 저장소에서는 실행하지 않았습니다.
 async function runStep12Checks(config) {
-  const realFetch = globalThis.fetch;
-  const readOnlyFetch = (input, init = {}) => {
-    const method = String(init.method ?? 'GET').toUpperCase();
-    if (method === 'GET' || method === 'HEAD') return realFetch(input, init);
-    // 쓰기 요청은 네트워크로 보내지 않습니다. 호출한 점검은 아래에서 not_run으로 바뀝니다.
-    // 격리 환경에는 Response 전역이 없을 수 있으므로 점검 코드가 읽는 항목(status·headers.get·json·clone·text)만 가진 값을 돌려줍니다.
-    const unsent = {
-      ok: false, status: 599, headers: { get: () => 'application/json' },
-      json: async () => ({}), text: async () => '{}', clone: () => unsent,
-    };
-    return Promise.resolve(unsent);
-  };
-  globalThis.fetch = readOnlyFetch;
-  let previous;
-  try {
-    previous = await runStep11Checks(config);
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-  const { deciderProbes, detectionProbes } = await import('./ops-probes.mjs');
-  const dropped = new Set([
-    'aleph_json_allowed_routes', // aleph_json_original_api_url이 같은 /aleph.json을 읽어 확인
-    'public_manifest_and_status_panel', // 11단계에서 확인했고 12단계에서 바뀌지 않음
-  ]);
-  const kept = previous
-    .filter(item => !dropped.has(item.attackId))
-    .map(item => (WRITE_CHECKS.has(item.attackId) ? { ...item, observed: 'not_run' } : item));
-
-  const probes = [...await deciderProbes(), ...detectionProbes()];
-  const matched = probes.filter(probe => probe.matches).length;
-  const localObserved = `로컬 가상 요청 판정기·탐지 ${matched}/${probes.length} 일치, 실제 회수와 41종 시험은 미실행`;
-
-  const app = config.publicAppUrl;
-  let deployed = 'not_run';
-  if (typeof app === 'string' && app.startsWith('https://')) {
-    const response = await fetch(new URL('/api/ops', app), { redirect: 'error', signal: AbortSignal.timeout(10000) });
-    let hasMessage = false;
-    try { hasMessage = typeof (await response.clone().json())?.error === 'string'; } catch { /* JSON이 아님 */ }
-    const type = response.headers.get('content-type') ?? '';
-    const denied = (response.status === 401 || response.status === 403) && type.includes('application/json') && hasMessage;
-    deployed = `비로그인 GET /api/ops HTTP ${response.status}, ${type.includes('application/json') ? 'JSON' : 'JSON 아님'}, 오류 문구 ${hasMessage ? '있음' : '없음'} (${denied ? '거부됨' : '거부되지 않음'})`;
-  }
-  return [
-    ...kept,
-    { attackId: 'ops_probes_local', expected: '작전실이 쓰는 판정기·탐지 가상 요청이 기대한 결과와 일치하고 회수·41종 시험은 미실행으로 남음',
-      observed: localObserved },
-    { attackId: 'anonymous_ops_summary', expected: '로그인 없는 작전실 요약 요청이 401 또는 403과 JSON 오류 문구로 거부됨',
-      observed: deployed },
-  ];
+  const { runChecks } = await import('./checks-core.mjs');
+  const { attempts } = await runChecks({ baseUrl: config.publicAppUrl, originalApiUrl: config.originalApiUrl });
+  return attempts;
 }

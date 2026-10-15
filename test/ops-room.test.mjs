@@ -52,7 +52,7 @@ test('작전실 요약은 판정기·탐지를 실제로 실행한 결과와 서
   assert.equal(summary.recovery.snapshot.verified, true);
   // 회수 시스템과 41종 시험은 실행하지 않았다고 표시한다.
   assert.equal(summary.revocation.source, 'not_run');
-  assert.ok(summary.notRun.some(item => item.id === 'attack_41'));
+  assert.match(summary.note, /41종 공격 전체는 심판이 보내며/u);
   // 메모 본문·제목·전체 식별자는 어디에도 없다.
   const dump = JSON.stringify(summary);
   assert.ok(!dump.includes('메모 본문 마커') && !dump.includes('메모 제목') && !dump.includes(noteId));
@@ -109,7 +109,7 @@ test('기대와 다른 응답은 실패로 남기고 토큰 값은 보고서에 
 
 test('작전실 화면은 서버 응답만 표로 그리고 저장 공간·성공 문구 상수를 쓰지 않는다', async () => {
   const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
-  assert.match(html, /await api\('\/api\/ops'\)/u);
+  assert.match(html, /await api\('\/api\/checks\?view=ops'\)/u);
   assert.match(html, /미실행/u);
   assert.doesNotMatch(html, /sessionStorage|localStorage|indexedDB|document\.cookie/u);
   // 화면 코드가 통과·승인 문구를 스스로 만들지 않는다: 표시 문구는 서버 응답 필드에서 온다.

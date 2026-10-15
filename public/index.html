@@ -191,17 +191,17 @@
       }
       table.append(row);
     }
-    function renderOps(data) {
+    function renderOps(data, checks) {
       const body = $('ops-body');
       const table = document.createElement('table');
       table.style.cssText = 'width:100%;border-collapse:collapse;font-size:14px';
-      const probe = (group, label) => {
-        for (const item of data[group].probes) {
-          opsRow(table, [label, item.id, `기대 ${item.expected}`, `실제 ${item.actual ?? '없음'}`, item.matches ? '일치' : '불일치', SOURCE_LABELS[data[group].source]]);
-        }
-      };
-      probe('decider', '판정기');
-      probe('detection', '탐지');
+      // 점검 수치와 목록은 서버의 /api/checks가 제출 묶음과 같은 함수로 만든 값만 표시합니다.
+      if (checks) {
+        opsRow(table, ['점검 수치', `총 ${checks.total} · 막음 ${checks.blocked} · 실패 ${checks.failed} · 미실행 ${checks.notRun}`, `요청 ${checks.requestsSent}건`, `확인 시각 ${checks.checkedAt}`, '', '서버 실행 결과']);
+        for (const item of checks.attempts) opsRow(table, ['점검', item.attackId, `기대 ${item.expected}`, `실제 ${item.observed}`, item.result === 'blocked' ? '막음' : item.result === 'not_run' ? '미실행' : '실패', '서버 실행 결과']);
+      } else {
+        opsRow(table, ['점검 수치', '읽지 못함', '', '', '', SOURCE_LABELS.unavailable]);
+      }
       const dev = data.revocation.devices;
       opsRow(table, ['회수', '기기 승인 기록', `승인 ${dev.approved} · 대기 ${dev.pending} · 거부 ${dev.denied}`, dev.ids.join(', ') || '없음', '', SOURCE_LABELS[dev.source]]);
       opsRow(table, ['회수', '실제 회수와 시간', data.revocation.note, '', '', SOURCE_LABELS[data.revocation.source]]);
@@ -209,9 +209,9 @@
       opsRow(table, ['복구', '정책 사본', snap.verified ? `${snap.version} · 커밋 ${snap.commit} · digest ${snap.digest}` : `검증 실패(${snap.reason})`, snap.verified ? (snap.unchanged ? '현재 정책과 같음' : `차이 ${snap.changes}곳`) : '', '', SOURCE_LABELS[snap.source]]);
       opsRow(table, ['복구', '메모 사본', `${data.recovery.backups.count}건`, data.recovery.backups.ids.join(', ') || '없음', '', SOURCE_LABELS[data.recovery.backups.source]]);
       opsRow(table, ['복구', '복원 감사 기록', `${data.recovery.restoreAudit.count}건`, data.recovery.restoreAudit.lastRestoreAt ?? '복원 기록 없음', '', SOURCE_LABELS[data.recovery.restoreAudit.source]]);
-      for (const item of data.notRun) opsRow(table, ['시험', item.id, item.note, '', '', '미실행']);
       body.replaceChildren(table);
       $('ops-status').textContent = `규칙: ${data.decider.ruleIds.join(', ')} · 단계 ${data.step} · 커밋 ${data.commit ?? '알 수 없음'} · 확인 시각 ${data.generatedAt}`;
+      $('ops-note').textContent = data.note;
     }
     async function loadOps() {
       const panel = $('ops');
@@ -219,7 +219,13 @@
       if (panel.hidden) return;
       $('ops-error').hidden = true;
       try {
-        renderOps(await api('/api/ops'));
+        const summary = await api('/api/checks?view=ops');
+        let checks = null;
+        try {
+          const response = await fetch('/api/checks', { cache: 'no-store' });
+          if (response.ok) checks = await response.json();
+        } catch { /* 읽지 못하면 점검 수치를 읽지 못함으로 표시합니다 */ }
+        renderOps(summary, checks);
       } catch (error) {
         $('ops-body').replaceChildren();
         $('ops-status').textContent = '요약을 불러오지 못했습니다. 아래 오류를 확인하세요.';
