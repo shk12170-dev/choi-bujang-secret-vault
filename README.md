@@ -248,7 +248,7 @@ Wazuh 형식의 공식 연습 경보(`xdr/fixtures/brute-force.json`, 28건, SHA
 ### 실행과 실제 결과
 
 ```bash
-npm run xdr:test                 # XDR 시험 36개(XDR-01·02·03 각 11개, 실행기 3개)
+npm run xdr:test                 # XDR 시험 47개(XDR-01·02·03·04 각 11개, 실행기 3개)
 npm run xdr:run -- brute-force   # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
 npm run xdr:replay               # 모듈별 모의 overlay 재생
 node xdr/brute-force/respond.mjs # 거부 후보·알림 로그 생성
@@ -363,6 +363,54 @@ npm run xdr:test                  # XDR 시험 36개
 - **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
 - **ZTNA 판정기:** `src/decider.mjs`는 6~12단계 규칙(`device_registered`, `step_up_required`, `zone_access`)을 갖고 있지만 요청 계약(`docs/DECIDER_REQUEST.md`)에는 검증된 출발 IP가 없습니다. 그래서 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 출발 IP를 사용자가 보낸 값·헤더에서 가져와 막지 않으며, 추가 거부는 `applyDenyOverlay()`를 모의 재생에서만 검증했고 실제 접속 허용·회수로 보고하지 않습니다.
 - 공식 경보의 조회 구문은 문서용 표기입니다. 인코딩·`${lower:j}`·`${::-j}`로 쪼갠 변형은 시험의 변형 사례로만 확인했고, 다른 경보 묶음이나 다른 취약점(CVE) 형태에서는 오분류가 있을 수 있습니다. 로컬 시험 통과는 심판 통과가 아니며 판정은 심판이 다시 실행해 확인합니다.
+
+## 보너스 xdr-04: 몰래 심어진 프로그램(지속성) 탐지
+
+Wazuh 형식의 공식 연습 경보(`xdr/fixtures/persistence.json`, 24건, SHA256 `9B3376D7…26959A`)에서 서명 없는 새 서비스·낯선 예약 작업·시작 폴더 변경을 가려 행동을 정합니다. 경보 원본은 고치지 않습니다. 파일 경로는 문자열로만 검사하고 이유·알림 로그·거부 규칙에 경로와 계정을 남기지 않습니다.
+
+### 구성
+
+| 파일 | 역할 |
+|---|---|
+| `xdr/persistence/read-alerts.mjs` | 확인용 읽기 모듈(공통 구현 `xdr/read-alerts.mjs`). 시각·출발 주소·계정·규칙 수준·설명만 뽑고 파일 경로는 내보내지 않습니다. `decide.mjs`는 이 파일을 부르지 않습니다. |
+| `xdr/persistence/patterns.json` | 지속 수단 패턴 세 개(이름·찾는 조건·근거 한 줄·출처)와 일부러 막지 않는 정상·애매한 사례. 근거는 MITRE ATT&CK T1543.003, T1053.005, T1547.001 |
+| `xdr/persistence/decide.mjs` | 제출용 판단 모듈. `decide(alert)` 하나만 내보내며 **`import`가 없는 단일 ES 모듈**이고 파일·네트워크·시계를 쓰지 않습니다. 패턴의 이름·조건·근거는 파일 맨 위 상수입니다. |
+| `xdr/persistence/respond.mjs` | `block`만 15분 만료·근거 경보 번호가 있는 추가 거부 후보로 `xdr/deny-rules.json`에 넣어 그 PC의 출발 주소를 격리 대상으로 만들고(다른 모듈 규칙 보존), 알림을 `xdr/alerts.log`에 쌓습니다. |
+| `xdr/persistence/result.json` | `npm run xdr:run -- persistence` 결과(`aleph.xdr.result.v1`) |
+| `test/persistence.test.mjs` | 읽기·분류·요인 하나로 막지 않음·독립 실행·이유에 경로·계정 없음·차단 후보·네 모듈 겹침과 만료 시험 |
+
+### 패턴과 판단 기준 (학습용 기준값, 보편 임계값 아님)
+
+| 패턴 | 기법 | 지속 수단 |
+|---|---|---|
+| `unsigned-new-service` | T1543.003 | 서비스 등록·서비스 실행 파일 교체 |
+| `unfamiliar-scheduled-task` | T1053.005 | 예약 작업 생성 |
+| `startup-folder-change` | T1547.001 | 시작 폴더·시작 프로그램 항목 추가 |
+
+- **차단(block):** 지속 수단 + 의심 요인 **둘 이상** + 경보 수준 10 이상. 의심 요인은 서명 없음, 임시 폴더 실행 파일, 평소 목록에 없음(처음 보는·새로 등록), 수업 시간 밖 실행, 임의 문자열 이름, 다시 켜도 남도록 등록, 실행 파일 교체, 원격 주소·연속 3건 이상 등록, 두 수단이 같은 파일을 가리킴, 시작 폴더 경로의 새 파일이며 서로 다른 종류만 한 번씩 셉니다(확신도 0.88~0.97).
+- **알림(alert):** 수단은 있지만 요인이 0~1개(수업 중 만든 작업 하나, 수업 도구 이름의 시작 항목, 서비스 설명만 바뀜, 임시 폴더 파일 하나뿐, 시작 폴더 변경 1건, 정지 후 재시작 등)이거나, 요인이 둘 이상이어도 수준이 낮은 경우(0.55~0.70)
+- **기록(record):** 지속 수단·요인이 없거나 수준 4 이하의 정상 이벤트(로그인, 평소 시각의 업데이트 예약, 서명된 기존 서비스, 시작 목록 읽기만 등)
+- "…등록은 없습니다", "…기록은 없습니다"처럼 해당 행동이 없다고 말하는 문장은 근거에서 뺍니다. 단어·수준·태그·주소·경보 번호·계정·순서 하나만으로는 막지 않고, 저장된 `result.json`을 정답으로 읽지 않습니다.
+
+### 실행과 실제 결과
+
+```bash
+npm run xdr:run -- persistence    # result.json 생성(판정자도 격리 환경에서 같은 명령을 다시 실행)
+npm run xdr:replay                # 네 모듈 모의 overlay 재생
+node xdr/persistence/respond.mjs  # 거부 후보·알림 로그 생성
+npm run xdr:test                  # XDR 시험 47개
+```
+
+- 분류: **block 8 · alert 8 · record 8** (총 24건). 명확한 공격 `ps-01`~`ps-08`은 `block`, 애매한 시도 `ps-09`~`ps-16`은 `alert`, 정상 이벤트 `ps-17`~`ps-24`는 `record`입니다. **정상·애매한 이벤트를 막은 경우는 없습니다.** 이 구분은 경보 설명·경로·수준으로 판단한 것이며 저장소에 정답표는 없습니다.
+- 네 모듈 모의 overlay: **attackDenied 34(10+8+8+8), normalDenied 0, ambiguousDenied 0, expiredDenied 0**
+- 독립 실행: `decide.mjs` 파일 하나를 `data:` URL로 불러와도 24건 결과가 같습니다.
+
+### 연결 범위와 한계
+
+- **격리의 의미:** "그 PC의 접속을 격리"는 경보의 출발 주소에 대한 15분짜리 추가 거부 후보를 만드는 것입니다. 이 후보를 `xdr/ztna-overlay.mjs`의 `applyDenyOverlay()`로 기존 판정 위에 덧씌우는 부분은 모의 재생에서만 검증했습니다.
+- **ZTNA 판정기:** `src/decider.mjs`는 `device_registered`·`step_up_required`·`zone_access` 규칙을 갖고 있지만 요청 계약(`docs/DECIDER_REQUEST.md`)에는 검증된 출발 IP나 PC 식별 값이 없습니다. 그래서 **운영 판정기에는 연결하지 않았고 기존 규칙도 고치지 않았습니다.** 사용자가 보낸 주소·헤더를 신뢰해 차단하지 않으며, 실제 접속 허용·회수로 보고하지 않습니다.
+- **Jev reviewer:** 연결 정보·키·계약이 없어 쓰지 않습니다. 애매한 경보는 바깥에 묻지 않고 `alert`로 남깁니다.
+- 공식 경보는 센서가 요약한 설명과 경로 한 개만 있어서, 서명 검증·파일 해시·실제 서비스 목록과의 대조는 하지 않았습니다. 다른 경보 묶음에서는 오분류가 있을 수 있으며, 로컬 시험 통과는 심판 통과가 아닙니다.
 
 ## 6단계: 등록한 기기만 자료실에 들어옴
 
