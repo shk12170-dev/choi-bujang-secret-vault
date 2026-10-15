@@ -565,7 +565,12 @@ async function runStep12Checks(config) {
     const method = String(init.method ?? 'GET').toUpperCase();
     if (method === 'GET' || method === 'HEAD') return realFetch(input, init);
     // 쓰기 요청은 네트워크로 보내지 않습니다. 호출한 점검은 아래에서 not_run으로 바뀝니다.
-    return Promise.resolve(new Response('{}', { status: 599, headers: { 'content-type': 'application/json' } }));
+    // 격리 환경에는 Response 전역이 없을 수 있으므로 점검 코드가 읽는 항목(status·headers.get·json·clone·text)만 가진 값을 돌려줍니다.
+    const unsent = {
+      ok: false, status: 599, headers: { get: () => 'application/json' },
+      json: async () => ({}), text: async () => '{}', clone: () => unsent,
+    };
+    return Promise.resolve(unsent);
   };
   globalThis.fetch = readOnlyFetch;
   let previous;

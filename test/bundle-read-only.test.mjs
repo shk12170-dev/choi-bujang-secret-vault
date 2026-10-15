@@ -7,12 +7,19 @@ test('npm run bundle의 점검은 12단계 이상에서 쓰기 요청을 보내�
   const config = JSON.parse(await readFile(new URL('../aleph.config.json', import.meta.url), 'utf8'));
   assert.ok(config.step >= 12);
   const realFetch = globalThis.fetch;
+  const realResponse = globalThis.Response;
   const methods = [];
+  // 격리 환경에는 Response·Headers 같은 전역이 없을 수 있다. 응답은 읽는 항목만 가진 일반 객체로 흉내 낸다.
+  const body = { error: 'LOGIN_REQUIRED', allowedRoutes: ['GET /api/notes/:id'], originalApiUrl: config.originalApiUrl, notes: [] };
+  const plain = {
+    ok: false, status: 401, headers: { get: () => 'application/json' },
+    json: async () => body, text: async () => JSON.stringify(body), clone: () => plain,
+  };
   globalThis.fetch = async (_input, init = {}) => {
     methods.push(String(init.method ?? 'GET').toUpperCase());
-    return new Response(JSON.stringify({ error: 'LOGIN_REQUIRED', allowedRoutes: ['GET /api/notes/:id'], originalApiUrl: config.originalApiUrl, notes: [] }),
-      { status: 401, headers: { 'content-type': 'application/json' } });
+    return plain;
   };
+  delete globalThis.Response;
   try {
     const { runAttackChecks } = await import('../src/attack-check.mjs');
     const attempts = await runAttackChecks(config);
@@ -25,6 +32,7 @@ test('npm run bundle의 점검은 12단계 이상에서 쓰기 요청을 보내�
     assert.equal(globalThis.fetch !== realFetch, true); // 시험용 대체가 그대로여야 점검이 원래 fetch를 되돌려 놓은 것
   } finally {
     globalThis.fetch = realFetch;
+    globalThis.Response = realResponse;
   }
 });
 
